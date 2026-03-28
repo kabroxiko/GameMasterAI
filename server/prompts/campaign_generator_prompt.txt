@@ -1,5 +1,5 @@
 {{{languageInstruction}}}
-Campaign core policy (GM-ONLY):
+Campaign core policy (DM-ONLY):
 - When generating the campaign CORE, IGNORE any player-specific data present in the session summary or the provided gameSetup. Do NOT reference character names, backgrounds, or player objectives.
 - Produce a concise campaign core only: include "campaignConcept" (2 sentences), "majorConflicts" (3-5 short strings), and "toneAndStyle" (1-2 adjectives). Keep outputs minimal and focused.
 - Output MUST be valid JSON only when used with a JSON output guard. Do NOT include any commentary, examples, or narrative beyond the allowed fields.

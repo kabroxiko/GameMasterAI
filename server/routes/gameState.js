@@ -63,6 +63,13 @@ router.post('/save', async (req, res) => {
 
         console.log('Saved game state _id:', gameState?._id);
         res.json(gameState);
+        // Trigger background summary generation for this game (non-blocking)
+        try {
+          const { triggerSummaryForGame } = require('../summaryWorker');
+          if (gameId) triggerSummaryForGame(gameId);
+        } catch (e) {
+          console.warn('Failed to trigger background summary after save:', e);
+        }
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to save game state' });
@@ -88,7 +95,7 @@ router.get('/load/:gameId', async (req, res) => {
     }
 });
 
-// Debug: return persisted raw request/output and consolidated core for a game (GM-only)
+// Debug: return persisted raw request/output and consolidated core for a game (DM-only)
 router.get('/debug/:gameId/prompts', async (req, res) => {
   const { gameId } = req.params;
   try {

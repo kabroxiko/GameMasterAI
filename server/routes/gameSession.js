@@ -6,7 +6,7 @@ const { generateResponse } = require('../openai-api');
 const { composeSystemMessages, loadPrompt } = require('../promptManager');
 const Mustache = require('mustache');
 
-const DEFAULT_MODEL = process.env.GM_OPENAI_MODEL || 'gpt-3.5-turbo';
+const DEFAULT_MODEL = process.env.DM_OPENAI_MODEL || 'gpt-3.5-turbo';
 
 // Note: Output formatting and presentation should be enforced via prompts.
 
@@ -196,7 +196,7 @@ router.post('/generate', async (req, res) => {
     }
 
     // Build system messages. If a persisted consolidated system core exists, do not recompose core messages;
-    // only include the dynamic skill/adventure seed and GM injections below. Otherwise compose the full core.
+    // only include the dynamic skill/adventure seed and DM injections below. Otherwise compose the full core.
     let systemMsgs = [];
     if (!persistedSystemCore) {
       systemMsgs = composeSystemMessages({ mode: resolvedMode, sessionSummary: sessionSummaryToUse, includeFullSkill, language }).filter(m => m.role === 'system');
@@ -225,7 +225,7 @@ router.post('/generate', async (req, res) => {
       }
     }
 
-    // If a campaignSpec is available from persisted GameState, render GM-only injections from it
+    // If a campaignSpec is available from persisted GameState, render DM-only injections from it
     if (persistedGameState && persistedGameState.campaignSpec) {
       const spec = persistedGameState.campaignSpec;
       // Helper to robustly take the first N items from a field that may be an array, object, or string.
@@ -246,7 +246,7 @@ router.post('/generate', async (req, res) => {
         let injectTemplate = null;
         let renderData = {};
         if (resolvedMode === 'initial' && spec) {
-          injectTemplate = loadPrompt('gm_inject_initial.txt');
+          injectTemplate = loadPrompt('dm_inject_initial.txt');
           renderData = {
             campaignConcept: spec.campaignConcept || '',
             factions: takeItems(spec.factions, 3),
@@ -259,10 +259,10 @@ router.post('/generate', async (req, res) => {
             sessionSummary: persistedGameState.summary || sessionSummary || ''
           };
         } else if ((resolvedMode === 'exploration' || resolvedMode === 'explore') && spec) {
-          injectTemplate = loadPrompt('gm_inject_explore.txt');
+          injectTemplate = loadPrompt('dm_inject_explore.txt');
           renderData = { factions: takeItems(spec.factions, 3) };
         } else if ((resolvedMode === 'combat' || resolvedMode === 'decision' || resolvedMode === 'investigation') && spec) {
-          injectTemplate = loadPrompt('gm_inject_combat.txt');
+          injectTemplate = loadPrompt('dm_inject_combat.txt');
           renderData = {
             majorNPCs: takeItems(spec.majorNPCs, 4),
             majorConflicts: takeItems(spec.majorConflicts, 4),
@@ -652,7 +652,8 @@ router.post('/generate-campaign-core', async (req, res) => {
     // If caller requested to wait for background stages (default true), run them synchronously and fail fast on error.
     if (gameId && waitForStages) {
       // Helper to run a stage with timeout and stop waiting on first failure.
-      const STAGE_TIMEOUT = process.env.GM_STAGE_TIMEOUT_MS ? parseInt(process.env.GM_STAGE_TIMEOUT_MS, 10) : 15000;
+      const STAGE_TIMEOUT = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000; // default 60s
+      console.log(`Stage timeout is ${STAGE_TIMEOUT}ms`);
       async function runStageWithTimeout(stageName) {
         try {
           const stagePromise = generateCampaignStage({ gameId, stage: stageName, campaignCore: parsed, systemMsgs, language });
@@ -813,34 +814,7 @@ async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, 
   }
 }
 
-// Route to generate game session summary   
-router.post('/generate-summary', async (req, res) => {
-    try {
-        // Extract the messages and the existing summary from the request body
-        const { messages = [], sessionSummary = '', language = 'English' } = req.body;
-
-        // Compose a concise system message to drive summarization
-        const inboundSummaryMessages = (messages || []).filter(m => m.role !== 'system');
-    const systemMsgs = composeSystemMessages({ mode: 'exploration', sessionSummary, includeFullSkill: false, language });
-    // Add a concise summarization instruction according to language
-    const summaryInstruction = language === 'Spanish'
-      ? '*Todo lo anterior fue una transcripción de una partida de rol. Resume los eventos descritos en esta transcripción. Sé conciso (menos de 75 palabras) y objetivo. Toma nota de personajes, lugares y objetos importantes. Usa tercera persona.*'
-      : '*Everything above is a transcript of a TTRPG session. Summarize the events concisely (under 75 words), noting important NPCs, locations, and unresolved threads. Use third person.*';
-    systemMsgs.push({ role: 'system', content: summaryInstruction });
-    const messagesToSend = [...systemMsgs, ...inboundSummaryMessages];
-
-        const aiSummary = await generateResponse({ messages: messagesToSend }, { max_tokens: 150, temperature: 0.8, gameId });
-        if (!aiSummary) {
-            return res.status(500).json({ error: 'AI summary was empty or failed (see server logs).' });
-        }
-        // Return raw summary from the model; prompts must enforce style and language
-        res.json(aiSummary);
-    } catch (error) {
-        console.error('Error generating text:', error);
-        res.status(500).json({ error: `Error generating text: ${String(error)}` });
-    }
-
-});
+// Note: summary generation is now handled server-side as part of campaign/session flows.
 
 // Export the router to be used in other files
 module.exports = router;

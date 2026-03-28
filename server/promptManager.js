@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const clientPromptsDir = path.join(__dirname, '../client/gamemasterai/src/prompts');
+const clientPromptsDir = path.join(__dirname, '../client/dungeonmaster/src/prompts');
 const serverPromptsDir = path.join(__dirname, 'prompts');
 const cache = {};
 

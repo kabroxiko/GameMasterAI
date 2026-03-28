@@ -1,5 +1,5 @@
 {{{languageInstruction}}}
-GM-ONLY COMBAT/DECISION GUIDANCE (do NOT reveal to players):
+DM-ONLY COMBAT/DECISION GUIDANCE (do NOT reveal to players):
 
 Relevant NPCs:
 {{#majorNPCs}}

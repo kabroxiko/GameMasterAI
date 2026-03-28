@@ -1,7 +1,7 @@
 <template>
     <div>
-        <h2>Load Game</h2>
-        <p v-if="loading">Loading...</p>
+        <h2>{{ $i18n.load_game }}</h2>
+        <p v-if="loading">{{ $i18n.loading }}</p>
         <p v-else-if="error">{{ error }}</p>
         <div v-else>
             <ul>

@@ -1,0 +1,22 @@
+---
+description: Disallow running git commit/push or creating commits unless the user explicitly requests it
+alwaysApply: true
+---
+
+# Do not commit, stage, or push without explicit user approval
+
+The assistant MUST NOT run git commands that create, modify, or push commits (for example `git add`, `git commit`, `git push`, or any command that stages or writes to the repository) unless the user explicitly asks for those actions.
+
+Rules:
+- Always ask for explicit, unambiguous permission before creating a commit or pushing changes.
+- When proposing a commit, show the diff and a concise commit message and ask the user to confirm (yes/no) before running any git commands.
+- Never perform automatic "fixup" commits, amend, or force-pushes without the user's explicit request and an explanation of risks.
+- If a commit is requested, follow the project's Git Safety Protocols and surface any errors or hooks that prevent the commit.
+
+Example prompts the assistant should use:
+- "I can create a commit with these changes and the message: '...'. Do you want me to proceed?"
+- "Ready to push the branch `feature/foo`. Confirm push? (yes/no)"
+
+Scope:
+This rule is always active for this workspace.
+

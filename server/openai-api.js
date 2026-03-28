@@ -1,10 +1,10 @@
 const axios = require('axios');
 
-const DEFAULT_MODEL = process.env.GM_OPENAI_MODEL || 'gpt-3.5-turbo';
-const USE_LM_STUDIO = String(process.env.GM_USE_LM_STUDIO || 'false').toLowerCase() === 'true';
+const DEFAULT_MODEL = process.env.DM_OPENAI_MODEL || 'gpt-3.5-turbo';
+const USE_LM_STUDIO = String(process.env.DM_USE_LM_STUDIO || 'false').toLowerCase() === 'true';
 // LM Studio commonly listens on :1234 in logs; default to that
-const LM_STUDIO_URL = process.env.GM_LM_STUDIO_URL || 'http://localhost:1234';
-const LM_STUDIO_MODEL = process.env.GM_LM_STUDIO_MODEL || process.env.GM_OPENAI_MODEL || 'gpt-3.5-turbo';
+const LM_STUDIO_URL = process.env.DM_LM_STUDIO_URL || 'http://localhost:1234';
+const LM_STUDIO_MODEL = process.env.DM_LM_STUDIO_MODEL || process.env.DM_OPENAI_MODEL || 'gpt-3.5-turbo';
 
 /**
  * generateResponse accepts either:
@@ -16,7 +16,7 @@ const LM_STUDIO_MODEL = process.env.GM_LM_STUDIO_MODEL || process.env.GM_OPENAI_
  *  - OpenAI REST API otherwise
  */
 async function generateResponse(input = {}, options = {}) {
-  const model = process.env.GM_OPENAI_MODEL || DEFAULT_MODEL;
+  const model = process.env.DM_OPENAI_MODEL || DEFAULT_MODEL;
   const messages = Array.isArray(input.messages)
     ? input.messages
     : [{ role: 'user', content: input.prompt || '' }];
@@ -66,7 +66,8 @@ async function generateResponse(input = {}, options = {}) {
       const payload = {
         model: LM_STUDIO_MODEL,
         input: messagesToPrompt(messages),
-        max_tokens: options.max_tokens || 500,
+        /* LM Studio native /api/v1/chat may not accept OpenAI-style `max_tokens` parameter.
+           Omit max_tokens to avoid unrecognized key errors; rely on model defaults or use server-side truncation. */
         temperature: options.temperature ?? 1.0,
       };
       const resp = await axios.post(`${base}/api/v1/chat`, payload, { headers });
@@ -99,7 +100,7 @@ async function generateResponse(input = {}, options = {}) {
       temperature: options.temperature ?? 1.0,
     };
     const headers = {
-      Authorization: `Bearer ${process.env.GM_OPENAI_API_KEY}`,
+    Authorization: `Bearer ${process.env.DM_OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     };
     const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, { headers });

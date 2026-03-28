@@ -1,6 +1,6 @@
 {{{languageInstruction}}}
 {{{languageInstruction}}}
-GM-ONLY EXPLORATION GUIDANCE (do NOT reveal to players):
+DM-ONLY EXPLORATION GUIDANCE (do NOT reveal to players):
 
 Relevant factions (brief):
 {{#factions}}

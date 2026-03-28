@@ -22,9 +22,10 @@ const app = express();
 
 const gameSessionRouter = require('./routes/gameSession');
 const gameStateRoutes = require('./routes/gameState'); 
+const { schedulePeriodicSummaries } = require('./summaryWorker');
 
-// CORS configuration: allow development origins (use GM_FRONTEND_URL env or default)
-const FRONTEND_URL = (process.env.GM_FRONTEND_URL || 'http://localhost:8082').replace(/\/$/, '');
+// CORS configuration: allow development origins (use DM_FRONTEND_URL env or default)
+const FRONTEND_URL = (process.env.DM_FRONTEND_URL || 'http://localhost:8082').replace(/\/$/, '');
 const allowedOrigins = [FRONTEND_URL];
 
 app.use(bodyParser.json());
@@ -58,8 +59,12 @@ app.use((req, res, next) => {
 app.use('/api/game-session', gameSessionRouter);
 app.use('/api/game-state', gameStateRoutes);
 
+// Start background summary scheduler (interval configurable via DM_SUMMARY_INTERVAL_MS)
+const SUMMARY_INTERVAL = parseInt(process.env.DM_SUMMARY_INTERVAL_MS || '60000', 10);
+schedulePeriodicSummaries(SUMMARY_INTERVAL);
+
 // Connection to MongoDB
-mongoose.connect(process.env.GM_MONGODB_URI, {
+mongoose.connect(process.env.DM_MONGODB_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 })

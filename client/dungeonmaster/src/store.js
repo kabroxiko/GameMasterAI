@@ -1,9 +1,10 @@
-//GMAI/client/gamemasterai/src/store.js
+//GMAI/client/dungeonmaster/src/store.js
 
 import { createStore } from "vuex";
 
 const storedUser = localStorage.getItem("user");
 const parsedUser = storedUser && storedUser !== "undefined" ? JSON.parse(storedUser) : null;
+const storedLanguage = localStorage.getItem("language");
 import axios from 'axios';
 
 export default createStore({
@@ -22,7 +23,11 @@ export default createStore({
             characterGender: 'Male'
         },
         systemMessageContentDM: '',
-        summary: ''
+        summary: '',
+        // global language setting for the UI (persisted)
+        language: storedLanguage || 'English',
+        // incrementing counter to notify components of language change events
+        languageVersion: 0,
 
     },
     mutations: {
@@ -54,6 +59,17 @@ export default createStore({
         },
         setSummary(state, summary) {
             state.summary = summary;
+        },
+        setLanguage(state, language) {
+            state.language = language;
+            try {
+                localStorage.setItem('language', language);
+            } catch (e) {
+                // ignore storage errors
+            }
+        },
+        notifyLanguageChanged(state) {
+            state.languageVersion = (state.languageVersion || 0) + 1;
         },
         
     },

@@ -1,6 +1,6 @@
 <template>
     <div class="home">
-        <h1>Welcome to GameMaster.AI</h1>
+        <h1>{{ $i18n.welcome }}</h1>
     </div>
 </template>
 

@@ -1,12 +1,12 @@
 {
-  "name": "unified-gamemasterai",
+  "name": "unified-dungeonmaster",
   "version": "1.0.0",
   "description": "A Web-based app for AI-driven TTRPG experiences",
   "main": "server.js",
   "scripts": {
-    "start": "concurrently \"npm run server\" \"npm --prefix ./client/gamemasterai run serve\"",
+    "start": "concurrently \"npm run server\" \"npm --prefix ./client/dungeonmaster run serve\"",
     "server": "cd server && npm start",
-    "client": "cd client && npm run serve",
+    "client": "cd client/dungeonmaster && npm run serve",
     "build": "vue-cli-service build",
     "lint": "vue-cli-service lint",
     "prod": "NODE_ENV=production node server.js",

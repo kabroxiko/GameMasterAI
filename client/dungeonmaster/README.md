@@ -1,4 +1,4 @@
-# gamemasterai
+# Dungeon Master (client)
 
 ## Project setup
 ```

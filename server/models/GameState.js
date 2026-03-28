@@ -30,7 +30,7 @@ const GameStateSchema = new mongoose.Schema({
         type: String,
         select: false,
     },
-    // Consolidated system core message persisted once per game (GM-only)
+    // Consolidated system core message persisted once per game (DM-only)
     systemCore: {
         type: String,
         select: false,

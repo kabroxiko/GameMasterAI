@@ -1,53 +1,38 @@
-// GMAI/client/gamemasterai/src/components/ChatRoom.vue
+// GMAI/client/dungeonmaster/src/components/ChatRoom.vue
 
 <template>
-    <h1 class="chat-room-title">GameMaster.AI - Chat</h1>
-    <h4 class="chat-room-subtitle">{{ language === 'Spanish' ? 'Ahora puedes chatear con un Maestro de Juego de IA. ¡Diviértete!' : 'You can now chat with an AI Game Master. Have fun!' }}</h4>
     <div v-if="errorMessage" class="error-message">
         <p>Error: {{ errorMessage }}</p>
         <button @click="tryAgain">Try again</button>
     </div>
-    <div class="chat-room">
+    <div class="chat-room two-column">
         
-        <div v-if="playerCharacter" class="character-sheet">
-            <h3 class="cs-title">{{ language === 'Spanish' ? 'Ficha del Personaje' : 'Character Sheet' }}</h3>
-            <div class="cs-grid">
-                <div><strong>{{ playerCharacter.name }}</strong> — {{ playerCharacter.race }}</div>
-                <div>{{ playerCharacter.class }} {{ playerCharacter.subclass ? ('(' + playerCharacter.subclass + ')') : '' }} — {{ language === 'Spanish' ? 'Nivel' : 'Level' }} {{ playerCharacter.level }}</div>
-                <div>{{ language === 'Spanish' ? 'PV Máx' : 'Max HP' }}: {{ playerCharacter.max_hp }} • AC: {{ playerCharacter.ac }}</div>
-                <div class="cs-backstory">{{ playerCharacter.brief_backstory }}</div>
-                <div class="cs-stats">
-                    <strong>STR</strong>: {{ playerCharacter.stats.STR }} &nbsp;
-                    <strong>DEX</strong>: {{ playerCharacter.stats.DEX }} &nbsp;
-                    <strong>CON</strong>: {{ playerCharacter.stats.CON }} &nbsp;
-                    <strong>INT</strong>: {{ playerCharacter.stats.INT }} &nbsp;
-                    <strong>WIS</strong>: {{ playerCharacter.stats.WIS }} &nbsp;
-                    <strong>CHA</strong>: {{ playerCharacter.stats.CHA }}
-                </div>
-                <div class="cs-equipment"><strong>{{ language === 'Spanish' ? 'Equipo' : 'Equipment' }}:</strong>
-                    <ul>
-                        <li v-for="(it, i) in playerCharacter.starting_equipment" :key="i">{{ it }}</li>
-                    </ul>
-                </div>
-            </div>
+        <!-- floating card handled globally -->
+        <div class="chat-messages chat-messages-container" style="flex:1">
+            <ChatMessage
+              v-for="(message, index) in messages"
+              :key="index"
+              :message="renderMarkdown(message.text)"
+              :sender="message.user"
+              :role="message.user === 'Player' ? 'player' : 'system'"
+            />
         </div>
-        <div class="chat-messages">
-            <div v-for="(message, index) in messages" :key="index" class="chat-message">
-                <strong>{{ message.user }}:</strong>
-                <div class="message-content" v-html="renderMarkdown(message.text)"></div>
-            </div>
-        </div>
-        <form @submit.prevent="submitMessage">
-            <input type="text" v-model="newMessage" :placeholder="language === 'Spanish' ? 'Escribe tu mensaje aquí...' : 'Type your message here...'" :disabled="isSending" />
-            <button type="submit" :disabled="isSending" aria-busy="isSending">
-              {{ isSending ? (language === 'Spanish' ? 'Enviando...' : 'Sending...') : (language === 'Spanish' ? 'Enviar' : 'Send') }}
+        <form @submit.prevent="submitMessage" class="chat-input-form">
+            <input class="chat-input" type="text" v-model="newMessage"
+              :placeholder="$i18n.chat_placeholder"
+              :disabled="isSending" />
+            <button class="ui-button chat-send-button" type="submit" :disabled="isSending" :aria-busy="isSending">
+              {{ isSending ? $i18n.sending : $i18n.send }}
             </button>
         </form>
-        <h1 class="notetaker-title">Notetaker.AI</h1>
-        <h4 class="notetaker-subtitle">{{ language === 'Spanish' ? 'Un resumen de tu aventura se actualizará aquí automáticamente.' : 'A summary of your adventure will update here automatically!' }}</h4>
-        <h4 class="notetaker-subtitle-editing">{{ language === 'Spanish' ? 'Puedes editar este resumen para ajustar lo que GameMaster.AI toma en cuenta con el tiempo. Estos cambios surtirán efecto la próxima vez que se actualice el resumen.' : 'You may edit this summary to adjust what GameMaster.AI takes into consideration over time. These edits will take effect the next time the summary updates.' }}</h4>
+        <!-- Notetaker UI removed -->
 
-        <NotePanel :summary="summary" @update-summary="updateSummaryInChatRoom" />
+        <aside class="right-sidebar" style="width:360px; margin-left:24px;">
+          <!-- Notetaker removed; summaries are server-managed -->
+          <div style="height:16px"></div>
+        </aside>
+    <!-- Floating character card overlay -->
+    <FloatingCard v-if="playerCharacter" :character="playerCharacter" :language="language" :defaultOpen="false" />
     </div>
 </template>
 
@@ -74,18 +59,21 @@ md.renderer.rules.heading_open = function(tokens, idx) {
 md.renderer.rules.heading_close = function(tokens, idx) {
     return `</${tokens[idx].tag}>`;
 };
-    import NotePanel from './NotePanel.vue';
+    import ChatMessage from '@/ui/ChatMessage.vue';
+    import FloatingCard from '@/ui/FloatingCard.vue';
 
     export default {
         components: {
-            NotePanel
+            ChatMessage,
+            FloatingCard
         },
         data() {
             return {
                 // summaryPrompt removed from client; server composes summary instruction
                 // Initial state for the component
                 newMessage: "", // Holds the current message being typed
-                language: 'English',
+                // language moved to global store; use computed property
+                // language: 'English',
                 messages: [], // Array to hold all the chat messages
                 conversation: [], // Array to hold all conversation data
                 summaryConversation: [], // Array to hold all summary conversation data
@@ -105,8 +93,8 @@ md.renderer.rules.heading_close = function(tokens, idx) {
         async created() {
             console.log('this.$route.params.id:', this.$route.params.id); // This should log the gameId or undefined
 
-            // Initialize language from store (set during setup)
-            this.language = (this.$store.state.gameSetup && this.$store.state.gameSetup.language) || 'English';
+            // language is now global in the store; no local initialization needed
+            
 
             // check if a gameId is provided in the route
             if (this.$route.params.id) {
@@ -129,6 +117,15 @@ md.renderer.rules.heading_close = function(tokens, idx) {
             playerCharacter() {
                 return this.localPlayerCharacter || (this.$store.state.gameSetup && this.$store.state.gameSetup.generatedCharacter) || null;
             }
+            ,
+            language: {
+                get() {
+                    return (this.$store.state && this.$store.state.language) || 'English';
+                },
+                set(val) {
+                    this.$store.commit('setLanguage', val);
+                }
+            }
         },
 
         methods: {
@@ -148,38 +145,7 @@ md.renderer.rules.heading_close = function(tokens, idx) {
                 console.log("Total tokens processed by AI: ", this.totalTokenCount);
 
             },
-            async updateSummary() {
-                try {
-                    this.errorMessage = null; // Clear the error message
-
-                    // Prepare an array of last ContextLength number of messages
-                    let lastSummaryMessages = this.summaryConversation.slice(-(this.ContextLength * 2));
-
-                    // Filter out system messages to avoid including long system prompts in the summary input
-                    lastSummaryMessages = lastSummaryMessages.filter(m => m.role !== 'system');
-
-                    // Increment token count based on the messages read by the AI
-                    lastSummaryMessages.forEach(message => {
-                        this.incrementTokenCount(message.content);
-                    });
-
-                    // Send only the recent user/assistant messages; server will add summarization instruction
-                    const response = await axios.post('/api/game-session/generate-summary', {
-                        messages: lastSummaryMessages,
-                        language: this.language,
-                    });
-
-                    this.summary += "\n" + response.data;
-                    this.incrementTokenCount(response.data); // Increment token count
-
-                    // Remove the used messages from summaryConversation
-                    this.summaryConversation = this.summaryConversation.slice(0, -(this.ContextLength));
-                } catch (error) {
-                    console.error('Error generating summary:', error);
-                    this.errorMessage = "Failed to generate summary. Please try again."; // Set the error message
-
-                }
-            },
+            // summary generation is handled server-side; frontend will not request summaries
 
         updateSummaryInChatRoom(updatedSummary) {
         this.summary = updatedSummary;
@@ -237,7 +203,7 @@ md.renderer.rules.heading_close = function(tokens, idx) {
                         };
                         this.conversation.push(aiMessage);
                         this.summaryConversation.push(aiMessage);
-                        this.messages.push({ user: "GameMaster.AI", text: aiMessageContent });
+                        this.messages.push({ user: "Dungeon Master", text: aiMessageContent });
 
                         // Increment the counter only if the message is from the user or the assistant
                         if (userMessage.role === 'user' || aiMessage.role === 'assistant') {
@@ -248,15 +214,7 @@ md.renderer.rules.heading_close = function(tokens, idx) {
                             this.saveGameState();
                         }
 
-                        if (this.userAndAssistantMessageCount % this.ContextLength === 0) {
-                            await this.updateSummary();
-
-                            const reminderMessage = {
-                                role: 'system',
-                                content: '(this is a reminder of your role, do not respond directly: ' + this.systemMessageContentDM + '. ' + 'This is also a summary of what has transpired in this game so far. Ensure continuity and consistency using this summary:' + this.summary + ')',
-                            };
-                            this.conversation.push(reminderMessage);
-                        }
+                        // Do not request frontend-generated summaries. Server handles summarization.
                     } catch (error) {
                         console.error('Error generating AI message:', error);
                         this.errorMessage = "Failed to send message. Please try again."; // Set the error message
@@ -292,7 +250,7 @@ md.renderer.rules.heading_close = function(tokens, idx) {
                     };
                     this.conversation.push(aiMessage);
                     this.summaryConversation.push(aiMessage);
-                    this.messages.push({ user: "GameMaster.AI", text: aiMessageContent });
+                    this.messages.push({ user: "Dungeon Master", text: aiMessageContent });
 
                     // Save the updated state
                     this.saveGameState();
@@ -368,7 +326,7 @@ md.renderer.rules.heading_close = function(tokens, idx) {
                     this.messages = this.conversation
                         .filter(({ role }) => role !== 'system')  // Filter out the 'system' role messages
                         .map(({ role, content }) => ({
-                            user: role === 'assistant' ? 'GameMaster.AI' : role.charAt(0).toUpperCase() + role.slice(1),
+                        user: role === 'assistant' ? this.$i18n.dm_label : role.charAt(0).toUpperCase() + role.slice(1),
                             text: content,
                         }));
 
@@ -403,17 +361,57 @@ md.renderer.rules.heading_close = function(tokens, idx) {
     padding: 1rem;
     margin-bottom: 1rem;
   }
+  .two-column {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    width: 100%;
+    max-width: 980px;
+    margin: 0 auto;
+  }
 
   .chat-message {
     margin-bottom: 0.75rem;
   }
 
-  input {
+  /* Chat input form: wider text box and aligned button */
+  .chat-input-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
     width: 100%;
-    padding: 0.5rem;
-    margin-bottom: 1rem;
-    box-sizing: border-box;
+    margin-top: 12px;
   }
+  .chat-input {
+    flex: 1 1 auto;
+    min-height: 48px;
+    padding: 0.8rem 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(10,9,8,0.92); /* darker, high-contrast input */
+    color: var(--gm-text);
+    box-sizing: border-box;
+    font-family: var(--gm-font-sans);
+    font-size: 1rem;
+    outline: none;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5) inset;
+    position: relative;
+    z-index: 6;
+  }
+  .chat-input::placeholder {
+    color: rgba(230,225,216,0.65);
+    opacity: 1;
+  }
+  .chat-send-button {
+    flex: 0 0 auto;
+    height: 44px;
+    padding: 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* ensure form sits above any background overlays */
+  .chat-input-form { position: relative; z-index: 6; }
 
   .error-message {
     color: red;
@@ -442,14 +440,18 @@ md.renderer.rules.heading_close = function(tokens, idx) {
   }
 
   .character-sheet {
-    border: 1px solid #ddd;
+    border: 1px solid rgba(255,255,255,0.03);
     padding: 0.75rem;
     margin-bottom: 1rem;
-    background: #fafafa;
+    background: rgba(255,255,255,0.02);
+    color: var(--gm-text);
+    border-radius: 8px;
+    box-shadow: var(--gm-shadow);
   }
 
   .character-sheet .cs-title {
     margin: 0 0 0.5rem 0;
+    color: var(--gm-text);
   }
 
   .character-sheet .cs-grid {
@@ -460,10 +462,18 @@ md.renderer.rules.heading_close = function(tokens, idx) {
 
   .character-sheet .cs-stats {
     font-family: monospace;
+    color: var(--gm-text);
   }
 
   .character-sheet ul {
     margin: 0;
     padding-left: 1.25rem;
+  }
+  .right-sidebar {
+    position: relative;
+  }
+  @media (max-width: 920px) {
+    .two-column { flex-direction: column; }
+    .right-sidebar { width: 100%; margin-left: 0; }
   }
 </style>
