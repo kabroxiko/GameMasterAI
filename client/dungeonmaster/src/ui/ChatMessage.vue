@@ -1,8 +1,8 @@
 <template>
-  <div :class="['chat-message', roleClass]" style="margin-bottom:10px">
-    <div style="font-size:0.85rem;color:var(--gm-muted)">{{ sender }}</div>
+  <article :class="['chat-message', roleClass]">
+    <div class="chat-message__meta">{{ sender }}</div>
     <div class="chat-message-body" v-html="message"></div>
-  </div>
+  </article>
 </template>
 
 <script>
@@ -11,11 +11,13 @@ export default {
   props: {
     message: { type: String, required: true },
     sender: { type: String, default: 'DM' },
-    role: { type: String, default: 'system' }, // 'player' | 'system'
+    /** 'player' | 'dm' (narration); legacy 'system' treated as dm */
+    role: { type: String, default: 'dm' },
   },
   computed: {
     roleClass() {
-      return this.role === 'player' ? 'from-player' : 'from-system';
+      if (this.role === 'player') return 'chat-message--player';
+      return 'chat-message--dm';
     },
   },
 };

@@ -14,7 +14,7 @@ Notes
 
 # Dungeon Master
 
-Dungeon Master is a web-based application designed to deliver a single-player tabletop role-playing game (TTRPG) experience, guided by an AI Dungeon Master. Utilizing cutting-edge AI language models such as GPT-3.5-turbo and GPT-4, this platform offers a seamless integration of an AI Dungeon Master with an AI notetaker to craft an immersive narrative for games like Dungeons & Dragons.
+Dungeon Master is a web-based application designed to deliver a tabletop role-playing game (TTRPG) experience, guided by an AI Dungeon Master. Players sign in with **Google**, games are **scoped to accounts** (with optional **invite links** for additional players in the same campaign). Utilizing cutting-edge AI language models such as GPT-3.5-turbo and GPT-4, this platform offers a seamless integration of an AI Dungeon Master with an AI notetaker to craft an immersive narrative for games like Dungeons & Dragons.
 
 The project originated from Cole Porter (Deck of DM Things on YouTube) and was supported by a dedicated Patreon community. When the project grew beyond the scope manageable by Cole, the decision was made to open-source Dungeon Master and discontinue the Patreon.
 
@@ -23,6 +23,7 @@ The project originated from Cole Porter (Deck of DM Things on YouTube) and was s
 - [Prerequisites](#prerequisites)
 - [Setting up External Dependencies](#setting-up-external-dependencies)
 - [Installation](#installation)
+- [Testing (server)](#testing-server)
 - [Usage](#usage)
 - [Contributing](#contributing)
 - [License](#license)
@@ -56,15 +57,32 @@ For proper functioning of the application, you must set up the following environ
   2. Generate an API key in the API section.
   3. In your `.env` file, add `DM_OPENAI_API_KEY=your_api_key`.
 
-#### SESSION_SECRET and JWT_SECRET
+#### Google Sign-In and session JWT (required for play)
 
-These are cryptographic keys used for securing sessions and token-based authentication respectively. Despite local deployment, it's crucial to use unique and random strings to prevent potential security breaches.
+- **Purpose**: Identify users, restrict `/api/game-state/*` and `/api/game-session/*` to members of each game, and support invites.
+- **Server** (`server/.env`; copy from [`server/env.example`](server/env.example)):
+  - `DM_GOOGLE_CLIENT_ID` — Web application client ID from [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (OAuth 2.0 Client IDs, type **Web**). Under that client, **Authorized JavaScript origins** must list the **exact** origin you use in the browser (scheme + host + port). Examples: `http://localhost:8080` and `http://127.0.0.1:8080` are **different** — add both if you switch. If this is wrong, the browser console shows `The given origin is not allowed for the given client ID` and requests to `accounts.google.com/gsi/button` return **403**.
+  - `DM_JWT_SECRET` — Long random string used only to sign **app session JWTs** (e.g. `openssl rand -hex 32`). **Do not** reuse your Google OAuth **client secret** here.
+- **Client** (`client/dungeonmaster/.env`; copy from [`client/dungeonmaster/env.example`](client/dungeonmaster/env.example)):
+  - `VUE_APP_DM_GOOGLE_CLIENT_ID` — Same value as `DM_GOOGLE_CLIENT_ID` (the public Web client ID).
+
+Optional: `DM_FRONTEND_URL`, `DM_CORS_ORIGINS`, and `DM_API_BASE` (client `main.js`) for non-default hosts (see env examples).
 
 ### Installation
 
 1. Ensure that you have npm installed on your machine. If not, download and install [npm](https://www.npmjs.com/get-npm).
 2. In the project's root directory, execute `npm install` to install dependencies.
    - If you encounter any issues, such as permissions errors, consult the npm troubleshooting guide (https://docs.npmjs.com/getting-started/troubleshooting)
+
+### Testing (server)
+
+From `server/`:
+
+```bash
+npm test
+```
+
+Runs `node:test` on `server/test/**/*.test.js`: unit tests for `gameAccess`, plus HTTP integration tests (`supertest` + in-memory MongoDB via `mongodb-memory-server`) covering `/api/game-state/mine`, `/load`, `/api/game-session/create-invite`, and `POST /api/auth/join`. The first run may download a MongoDB binary for the memory server.
 
 ### Usage
 
@@ -74,7 +92,7 @@ To start Dungeon Master:
 2. Run `npm start` to launch both frontend and backend servers.
 3. Open your web browser and enter the local URL provided by the output in the terminal.
 
-You will be greeted with a user interface displaying the Dungeon Master logo and options to start a new game or load an existing one. First time users should follow the new game route to setup and then play.
+You will be greeted with the Dungeon Master home page. Sign in with Google (after configuring OAuth origins), set a **player name** the first time, then use **New game** or **Load game** to play.
 
 ## Contributing
 

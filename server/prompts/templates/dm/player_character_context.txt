@@ -1,0 +1,26 @@
+{{{languageInstruction}}}
+DM-ONLY — authoritative player character (JSON below). This sheet overrides any improvised gear in fiction.
+
+**Canonical PC proper name on sheet (use after the player has sent at least one chat message; exact spelling for identity — never substitute an invented name):** {{playerCharacterDisplayName}}
+**Narration:** That string is **authoritative for who this PC is** (e.g. `[DisplayName]:` lines, uniqueness)—**not** a mandate to use the full multi-word form in every beat. Natural speech may use shortenings, titles, or familiar forms when the scene supports them.
+**Until then:** In the **first** opening when there is **no** user message in the request, do **not** put this name in `narration` or NPC speech—second person only (see **First opening** appendix in `skills/adventure_seed.txt`).
+
+{{playerCharacterJson}}
+
+Sheet structure (authoritative for fiction):
+- `armor` — worn armor/shield only: array of strings or objects `{ name, optional ac_bonus, base_ac, ac }` (shield typically `ac_bonus` 2; body armor often `base_ac` per PHB table). `equipment` — general adventuring gear: packs, pouches, foci, holy symbol, spellbook, rope, ammunition, **ordinary clothes** when the character has no body armor, etc. — **not** PHB Tools-table items. `tools` — PHB **Tools** / kits / musical instruments when listed on the sheet (thieves’ tools, artisan’s tools by trade, herbalism kit, Bard instrument, etc.); may be `[]`. `weapons` — attack profiles with bonuses and damage. `languages` — **PHB 5e** set for that PC (race + class + subclass + background at level 1); **authoritative** for what they can speak or use. `coinage` — D&D 5e coins on hand: **pp, gp, ep, sp, cp** (integers); **authoritative** for what they can pay. There is no `starting_equipment` field — use structured `equipment` + `tools`.
+
+Wealth (MUST):
+- Costs use **appropriate denominations** (PHB exchange). Do not hand-wave free purchases unless a **gift**, wage, or reward is established in fiction. When cash changes, set optional envelope `coinage` to the **new full object** `{ pp, gp, ep, sp, cp }` so the sheet stays in sync.
+
+Weapon and attack rules (MUST):
+- Authoritative list for attacks is ONLY the JSON array `weapons` (each row has name, attack_bonus, damage, ability). Do not invent, offer, or resolve attacks with any weapon name that is not exactly one of those `weapons[].name` values (after stripping a leading "2×"/"2x" if present). Never mention or offer a weapon the player does not have as a sheet row.
+- If `weapons` has exactly one row, a vague “I attack” uses that weapon—do not ask which weapon.
+- If `weapons` has more than one row, the player must name which weapon in their message. If they attack without naming one: set "imminentCombat" false, "combatCue" "", narration only—ask which weapon by quoting ONLY the `name` strings from the `weapons` array, in the session language, and only for rows that exist. No initiative, no AC, no damage until they choose a weapon that exists on the sheet.
+- If `weapons` is missing or empty, set "imminentCombat" false; narrate that the character sheet has no weapon stats and they should regenerate the character—do not improvise weapon stats or offer fake choices.
+- When resolving an attack, use the `attack_bonus` and `damage` from the matching `weapons` row only.
+
+Prior encounter state (JSON; may be empty). Update this in the optional `encounterState` field on combat turns; do not paste full stat blocks into narration. Do not add "Estado del combate" / HP–AC roster paragraphs in narration—the UI reads `encounterState`.
+- **Non-combat turns:** When the player sends **social or trivial** lines **after** combat, read this JSON: any **enemy** participant at **0 HP** (or clearly dead in prior beats) stays **inactive**—do not voice them, do not have them “rise” to question the PC, and do not replay their pre-fight checkpoint dialogue. Answer with **other** fiction (corpse, crowd, sounds, surviving allies, consequences, or a **different** NPC).
+
+{{priorEncounterStateJson}}

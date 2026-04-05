@@ -1,0 +1,8 @@
+OUTPUT FORMAT RULE: For requests that must return machine-readable data, return ONLY the requested JSON object and NO additional text, markdown, explanation, or commentary. Do not restate instructions or paste example JSON from the prompt as your answer. Match the keys and shape the user message asks for (including DM envelope keys like "narration" when that is the task).
+
+If the API or model stack sends a separate reasoning / thinking / chain-of-thought stream or message part, leave it empty: put the complete valid JSON only in the final assistant-visible content. Reasoning must not appear where the server parses the reply.
+
+If something is incomplete, still return syntactically valid JSON with the required top-level keys: use shorter strings, fewer array entries, or empty arrays where appropriate—never a bare `{}` when the request defines specific keys (DM play envelope keys, campaign generator keys, etc.). Never emit truncated JSON or stop mid-string.
+
+IMPORTANT OVERRIDE: When returning machine-readable JSON, IGNORE any length-splitting conventions such as the token "[CONTINUE]". Do NOT append "[CONTINUE]" or split the JSON across multiple messages. If you are near max_tokens, shorten content inside the JSON so the object still closes with valid braces and quotes—do not output `{}` or half-finished JSON as a shortcut.
+

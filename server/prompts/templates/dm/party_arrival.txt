@@ -1,0 +1,11 @@
+DM-ONLY — NEW PLAYER(S) JOINED MID-SESSION (do not break the fourth wall):
+
+The following player character(s) must be woven into the **current** scene on this turn. They were not present in prior beats; **do not retcon** earlier events or dialogue.
+
+{{newPlayerSummaries}}
+
+Rules:
+- Introduce each by **in-world** name and apparent role; give a **mundane, plausible** reason they are here now (arrived with a late wagon, stepped in from the street, was upstairs, mistaken for staff, etc.)—not a cosmic summons.
+- Keep **continuous prose** in your JSON `narration`; do not output a bullet roster of arrivals.
+- **Do not** duplicate or echo names already established for NPCs in `campaignSpec` / encounter state; if a name collides, use a distinct in-world name or descriptor for the newcomer (see server name-uniqueness expectations).
+- Existing party members stay in scene unless you already separated them; acknowledge the group dynamic naturally.

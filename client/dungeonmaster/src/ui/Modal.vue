@@ -1,7 +1,16 @@
 <template>
-  <div class="modal-backdrop" @click.self="$emit('close')" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:1000;">
-    <div class="ui-panel" style="max-width:720px;width:90%;">
-      <button @click="$emit('close')" style="float:right;background:none;border:none;color:var(--gm-muted);font-weight:bold">×</button>
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    @click.self="$emit('close')"
+  >
+    <div class="modal-panel ui-panel">
+      <button
+        type="button"
+        class="modal-close"
+        aria-label="Close"
+        @click="$emit('close')"
+      >×</button>
       <slot />
     </div>
   </div>

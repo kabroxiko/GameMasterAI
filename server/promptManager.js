@@ -6,6 +6,13 @@ const clientPromptsDir = path.join(__dirname, '../client/dungeonmaster/src/promp
 const serverPromptsDir = path.join(__dirname, 'prompts');
 const cache = {};
 
+const CAMPAIGN_GENERATOR_REL = 'templates/campaign/generator.txt';
+
+function resolvePromptRelativePath(filename) {
+  if (!filename || typeof filename !== 'string') return filename;
+  return filename.replace(/\\/g, '/');
+}
+
 /** Explicit violent / attack intent on the latest user line (Spanish + English). */
 const LAST_USER_COMBAT_RE =
   /\b(ataco|atacar|ataca|atacáis|golpeo|golpear|golpea|golpeas|disparo|disparar|dispara|apuñalo|apuñalar|puñetazo|pateo|patear|empujo|empujar|arrojo|arrojar|lanzo|lanzar|desenvaino|desenvainar|desenfundo|desenfundar|mato|matar|hiereo|herir|derribo|derribar|acuchillo|acuchillar|corto|rajo|peleo|pelear|lucho|luchar|combate|iniciativa|daño|armadura|clase de armadura|tirada de ataque|tiro para golpear|bonificador de ataque|impacto|ajustar cuentas)\b|\b(attack|attacks|attacking|stab|stabs|shoot|shooting|punch|kick|draw my|i draw|fire at|swing at|hit him|hit her|slash|charge at|grapple|shove|combat|initiative|damage dealt|attack roll|roll to hit)\b/i;
@@ -45,9 +52,11 @@ function userMessageNamesWeaponFromSheet(userText, weapons) {
 
 /**
  * When the PC has more than one weapon row, a vague attack ("ataco", "I attack") must NOT start combat until they name a weapon.
+ * @param {{ treatAsCombatDeclared?: boolean }} [options] — when true (e.g. AI intent router), apply the same check without regex combat verbs.
  */
-function blocksCombatEntryForAmbiguousWeapon(userText, generatedCharacter) {
-  if (!userMessageLooksCombat(userText)) return false;
+function blocksCombatEntryForAmbiguousWeapon(userText, generatedCharacter, options = {}) {
+  const treat = Boolean(options.treatAsCombatDeclared);
+  if (!treat && !userMessageLooksCombat(userText)) return false;
   const weapons =
     generatedCharacter && typeof generatedCharacter === 'object' && Array.isArray(generatedCharacter.weapons)
       ? generatedCharacter.weapons
@@ -58,7 +67,10 @@ function blocksCombatEntryForAmbiguousWeapon(userText, generatedCharacter) {
 }
 
 function languageInstructionForCompose(language) {
-  const langFile = language && String(language).toLowerCase() === 'spanish' ? 'language_spanish.txt' : 'language_english.txt';
+  const langFile =
+    language && String(language).toLowerCase() === 'spanish'
+      ? 'rules/language_spanish.txt'
+      : 'rules/language_english.txt';
   return loadPrompt(langFile) || '';
 }
 
@@ -69,29 +81,50 @@ function renderSkillPrompt(skillContent, language) {
 }
 
 function loadPrompt(filename) {
-  if (cache[filename]) return cache[filename];
-  const serverPath = path.join(serverPromptsDir, filename);
-  const clientPath = path.join(clientPromptsDir, filename);
+  const rel = resolvePromptRelativePath(filename);
+  if (cache[rel]) return cache[rel];
+  const serverPath = path.join(serverPromptsDir, rel);
+  const clientPath = path.join(clientPromptsDir, path.basename(rel));
   try {
     // Prefer authoritative prompt files located on the server (keep AI prompt text centralized)
     if (fs.existsSync(serverPath)) {
       const content = fs.readFileSync(serverPath, 'utf8').trim();
-      cache[filename] = content;
+      cache[rel] = content;
       return content;
     }
     if (fs.existsSync(clientPath)) {
       const content = fs.readFileSync(clientPath, 'utf8').trim();
-      cache[filename] = content;
+      cache[rel] = content;
       return content;
     }
-    console.warn('Prompt file missing (both server and client):', filename);
-    cache[filename] = '';
+    console.warn('Prompt file missing (both server and client):', rel, filename !== rel ? `(requested as ${filename})` : '');
+    cache[rel] = '';
     return '';
   } catch (e) {
-    console.warn('Error loading prompt file:', filename, e);
-    cache[filename] = '';
+    console.warn('Error loading prompt file:', rel, e);
+    cache[rel] = '';
     return '';
   }
+}
+
+/**
+ * Merged campaign metadata prompt: build-context block, then `---`, then Mustache user slice.
+ * @returns {{ buildContext: string, userTemplate: string }}
+ */
+function loadCampaignGeneratorParts() {
+  const full = loadPrompt(CAMPAIGN_GENERATOR_REL);
+  const sep = '\n---\n';
+  const idx = full.indexOf(sep);
+  if (!full || !String(full).trim()) {
+    return { buildContext: '', userTemplate: '' };
+  }
+  if (idx === -1) {
+    return { buildContext: '', userTemplate: full.trim() };
+  }
+  return {
+    buildContext: full.slice(0, idx).trim(),
+    userTemplate: full.slice(idx + sep.length).trim(),
+  };
 }
 
 /**
@@ -103,16 +136,16 @@ function loadPrompt(filename) {
 function composeSystemMessages({ mode = 'exploration', sessionSummary = '', includeFullSkill = false, language = 'English' } = {}) {
   const msgs = [];
   // core system always first
-  const core = loadPrompt('systemCore.txt');
+  const core = loadPrompt('core/system.txt');
   if (core) msgs.push({ role: 'system', content: core });
 
   // style/story
-  const style = loadPrompt('styleStory.txt');
+  const style = loadPrompt('core/style.txt');
   if (style) msgs.push({ role: 'system', content: style });
 
   // session memory (short)
   if (sessionSummary) {
-    const memTemplate = loadPrompt('memory_summary.txt');
+    const memTemplate = loadPrompt('rules/memory_summary.txt');
     const mem = `${memTemplate}\n\nSession summary: ${sessionSummary}`;
     msgs.push({ role: 'system', content: mem });
   }
@@ -123,16 +156,16 @@ function composeSystemMessages({ mode = 'exploration', sessionSummary = '', incl
     msgs.push({
       role: 'system',
       content:
-        'Note: Character data is available to the server. DO NOT include a character sheet or full character stats in your response. Output only the narrative opening (1–2 sentence context + 1–2 sentence hook). The client will render the Character Sheet separately.',
+        'Note: Character data is available to the server. DO NOT include a character sheet or full character stats in your response. The client renders the sheet separately. For length and structure, follow the dedicated adventure-seed system block supplied by the server.',
     });
   }
 
   // skill prompts: include only relevant one
   const skillMap = {
-    combat: 'skill_combat.txt',
-    investigation: 'skill_investigation.txt',
-    decision: 'skill_decision.txt',
-    initial: 'skill_adventureSeed.txt',
+    combat: 'skills/combat.txt',
+    investigation: 'skills/investigation.txt',
+    decision: 'skills/decision.txt',
+    initial: 'skills/adventure_seed.txt',
   };
 
   const skillFile = skillMap[mode];
@@ -140,8 +173,8 @@ function composeSystemMessages({ mode = 'exploration', sessionSummary = '', incl
   if (skillFile) {
     const skillContent = loadPrompt(skillFile);
     // Opening adventure seed is merged in gameSession /generate with Mustache (languageInstruction).
-    // Embedding skill_adventureSeed here duplicates it and leaves {{{languageInstruction}}} unreplaced.
-    const adventureSeedDeferred = mode === 'initial' && skillFile === 'skill_adventureSeed.txt';
+    // Embedding skills/adventure_seed.txt here duplicates it and leaves {{{languageInstruction}}} unreplaced.
+    const adventureSeedDeferred = mode === 'initial' && skillFile === 'skills/adventure_seed.txt';
     if (adventureSeedDeferred) {
       msgs.push({
         role: 'system',
@@ -154,20 +187,12 @@ function composeSystemMessages({ mode = 'exploration', sessionSummary = '', incl
       // short reminder
       msgs.push({ role: 'system', content: `Mode: ${mode}. Follow the ${mode} guidelines concisely.` });
     }
-    // If this is decision-related, include assistant few-shot examples to bias style
-    try {
-      const decisionExamples = loadPrompt('skill_decision_examples.txt');
-      if (decisionExamples && (skillFile === 'skill_decision.txt' || mode === 'initial' || mode === 'decision')) {
-        msgs.push({ role: 'assistant', content: decisionExamples });
-      }
-    } catch (e) {
-      // ignore
-    }
   }
 
   // language-specific prompt (e.g., language_spanish.txt or language_english.txt) - add last to ensure it overrides
   try {
-    const langFile = language && language.toLowerCase() === 'spanish' ? 'language_spanish.txt' : 'language_english.txt';
+    const langFile =
+      language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
     const langPrompt = loadPrompt(langFile);
     if (langPrompt) msgs.push({ role: 'system', content: langPrompt });
   } catch (e) {
@@ -175,22 +200,18 @@ function composeSystemMessages({ mode = 'exploration', sessionSummary = '', incl
   }
   // Append a general length guard to avoid overly long single replies
   try {
-    const guard = loadPrompt('length_guard.txt');
+    const guard = loadPrompt('rules/length_guard.txt');
     if (guard) msgs.push({ role: 'system', content: guard });
   } catch (e) {
     // ignore
   }
-  // decision behavior is enforced globally in systemCore.txt (no explicit option lists)
+  // decision behavior is enforced globally in core/system.txt (no explicit option lists)
 
-  // Note: global language and core rules live in systemCore.txt. Skill prompts contain focused guidance.
+  // Note: global language and core rules live in core/system.txt. Skill prompts contain focused guidance.
 
   return msgs;
 }
 
-/*
- * Simple heuristic to detect current mode from recent conversation messages.
- * Prioritizes the latest user line for combat verbs (ES/EN), then recent window.
- */
 function lastUserText(conversation = []) {
   if (!Array.isArray(conversation)) return '';
   for (let i = conversation.length - 1; i >= 0; i--) {
@@ -200,34 +221,10 @@ function lastUserText(conversation = []) {
   return '';
 }
 
-function detectMode(conversation = []) {
-  if (!Array.isArray(conversation)) return 'exploration';
-
-  const lastUser = lastUserText(conversation).toLowerCase();
-  if (lastUser && LAST_USER_COMBAT_RE.test(lastUser)) return 'combat';
-
-  const recent = conversation.slice(-12).map(m => (m.content || '').toLowerCase()).join('\n');
-
-  const combatRe =
-    /\b(attack|attacks|attack roll|initiative|combat|hit for|damage|hit|miss|armor class|\bac\b|critical|ataco|atacar|combate|daño|golpe|tirada|clase de armadura)\b/;
-  if (combatRe.test(recent)) return 'combat';
-
-  const investRe = /\b(investigat|search|clue|examine|inspect|percept|forensic|evidence|trace)\b/;
-  if (investRe.test(recent)) return 'investigation';
-
-  const decisionRe = /\b(choose|choose one|option|which do you|do you want to|what do you do|decide)\b/;
-  if (decisionRe.test(recent)) return 'decision';
-
-  const initialRe = /\b(adventure|hook|seed|begin|start of your adventure|two-sentence)\b/;
-  if (initialRe.test(recent)) return 'initial';
-
-  return 'exploration';
-}
-
 module.exports = {
   composeSystemMessages,
   loadPrompt,
-  detectMode,
+  loadCampaignGeneratorParts,
   lastUserText,
   userMessageLooksCombat,
   blocksCombatEntryForAmbiguousWeapon,

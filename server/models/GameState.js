@@ -8,7 +8,27 @@ const GameStateSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
-  
+
+    ownerUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+    },
+    memberUserIds: {
+        type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+        default: [],
+    },
+    /** Opaque single-use token for POST /api/auth/join; cleared after the first successful new-member join. */
+    inviteToken: {
+        type: String,
+        select: false,
+        default: null,
+    },
+    inviteTokenCreatedAt: {
+        type: Date,
+        default: null,
+    },
+
     gameSetup: Object,
     conversation: Array,
     summaryConversation: Array,
@@ -65,6 +85,20 @@ const GameStateSchema = new mongoose.Schema({
     // Set when initial /generate recovered narration from truncated/invalid JSON (diagnostic)
     dmInitialEnvelopeSalvagedAt: { type: String },
     dmInitialEnvelopeSalvagedChars: { type: Number },
+    // Last AI intent-router pass (play mode / combat declaration); select:false keeps load light
+    intentRouterRaw: { type: String, select: false },
+    intentRouterAt: { type: String },
+    intentRouterError: { type: String, select: false },
+    /** When set, MongoDB TTL deletes the doc at this time (draft character-only parties). Cleared when campaign exists or 2+ members. */
+    draftPartyExpiresAt: {
+        type: Date,
+        default: null,
+    },
 });
+
+GameStateSchema.index({ inviteToken: 1 }, { sparse: true });
+GameStateSchema.index({ ownerUserId: 1 });
+GameStateSchema.index({ memberUserIds: 1 });
+GameStateSchema.index({ draftPartyExpiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 
 module.exports = mongoose.model('GameState', GameStateSchema);

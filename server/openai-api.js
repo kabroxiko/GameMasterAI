@@ -26,10 +26,139 @@ function getLastGenerateFailureMessage() {
   return lastGenerateFailureMessage;
 }
 
+/** If the gateway already parsed JSON mode output into an object, re-serialize for downstream JSON.parse. */
+function stringifyIfPlayerCharacterRoot(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  if (obj.playerCharacter != null && typeof obj.playerCharacter === 'object') {
+    try {
+      return JSON.stringify(obj);
+    } catch (e) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** One segment inside message.content (string | object | nested array). */
+function assistantContentPartToString(part) {
+  if (part == null) return '';
+  if (typeof part === 'string') return part;
+  if (typeof part === 'number' || typeof part === 'boolean') return String(part);
+  if (Array.isArray(part)) return part.map(assistantContentPartToString).join('');
+  if (typeof part === 'object') {
+    if (typeof part.text === 'string') return part.text;
+    if (typeof part.content === 'string') return part.content;
+    if (typeof part.output === 'string') return part.output;
+    if (typeof part.value === 'string') return part.value;
+    if (part.delta && typeof part.delta.content === 'string') return part.delta.content;
+    if (part.message && typeof part.message.content === 'string') return part.message.content;
+    if (part.content != null && typeof part.content !== 'string') {
+      const inner = normalizeAssistantContent(part.content);
+      if (inner) return inner;
+    }
+    const sj = stringifyIfPlayerCharacterRoot(part);
+    if (sj) return sj;
+    try {
+      const keys = Object.keys(part);
+      if (keys.length === 1) {
+        const v = part[keys[0]];
+        if (typeof v === 'string') return v;
+        if (v != null && typeof v === 'object') {
+          const nested = stringifyIfPlayerCharacterRoot(v);
+          if (nested) return nested;
+        }
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  return '';
+}
+
+function isReasoningLikeSegment(part) {
+  if (!part || typeof part !== 'object' || Array.isArray(part)) return false;
+  const t = String(part.type || '').toLowerCase();
+  return t === 'reasoning' || t === 'thinking' || t === 'chain_of_thought';
+}
+
+/**
+ * LM Studio and similar APIs may append reasoning blocks before the real assistant text. We never use that
+ * content: drop those array elements and join the rest so JSON extraction does not see stray `{` inside reasoning.
+ *
+ * @returns {string|null|undefined} non-empty string if usable text remains after omission; `null` if only
+ *   reasoning (or empty) segments were present; `undefined` if the array had no reasoning segments (caller
+ *   should use the default join-all path).
+ */
+function assistantContentArrayOmitReasoning(parts) {
+  if (!Array.isArray(parts) || parts.length === 0) return undefined;
+  if (!parts.some(isReasoningLikeSegment)) return undefined;
+  const kept = parts.filter((p) => !isReasoningLikeSegment(p));
+  const joined = kept.map(assistantContentPartToString).join('');
+  const t = joined.trim();
+  if (t.length) return joined;
+  return null;
+}
+
+/**
+ * OpenAI-compatible APIs may return message.content as a string, a parsed object (JSON mode), or an array of parts.
+ * Some gateways use non-standard keys; without coercion the route sees "[object Object]" and parse fails.
+ */
+function normalizeAssistantContent(content) {
+  if (content == null) return null;
+  if (typeof content === 'string') {
+    const t = content.trim();
+    return t.length ? content : null;
+  }
+  if (Array.isArray(content)) {
+    const withoutReasoning = assistantContentArrayOmitReasoning(content);
+    if (withoutReasoning !== undefined) return withoutReasoning;
+    const joined = content.map(assistantContentPartToString).join('');
+    const t = joined.trim();
+    if (t.length) return joined;
+    for (const part of content) {
+      const sj = part && typeof part === 'object' && !Array.isArray(part) ? stringifyIfPlayerCharacterRoot(part) : null;
+      if (sj) return sj;
+    }
+    return null;
+  }
+  if (typeof content === 'object') {
+    if (typeof content.text === 'string') {
+      const t = content.text.trim();
+      return t.length ? content.text : null;
+    }
+    const root = stringifyIfPlayerCharacterRoot(content);
+    if (root) return root;
+    try {
+      const s = JSON.stringify(content);
+      if (s.length > 2) return s;
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  return null;
+}
+
+/** Ensure we never return a non-string to routes that pass output to JSON parsers. */
+function coerceAssistantOutputToString(raw) {
+  if (raw == null) return null;
+  const n = normalizeAssistantContent(raw);
+  if (n) return n;
+  if (typeof raw === 'string' && raw.trim()) return raw;
+  try {
+    if (typeof raw === 'object') return JSON.stringify(raw);
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+}
+
 /**
  * generateResponse accepts either:
  *  - { messages: [...] } (array of chat messages), or
  *  - { prompt: "string" } (simple prompt)
+ *
+ * options.response_format (e.g. { type: 'json_object' }) is forwarded to OpenAI-compatible
+ * /v1/chat/completions when set.
  *
  * Supports two backends:
  *  - LM Studio (local) when USE_LM_STUDIO=true
@@ -37,7 +166,7 @@ function getLastGenerateFailureMessage() {
  */
 async function generateResponse(input = {}, options = {}) {
   lastGenerateFailureMessage = '';
-  const model = process.env.DM_OPENAI_MODEL || DEFAULT_MODEL;
+  const model = options.model || process.env.DM_OPENAI_MODEL || DEFAULT_MODEL;
   const messages = Array.isArray(input.messages)
     ? input.messages
     : [{ role: 'user', content: input.prompt || '' }];
@@ -56,7 +185,12 @@ async function generateResponse(input = {}, options = {}) {
 
   // Convert chat messages to a single prompt for LM Studio
   const messagesToPrompt = (msgs) =>
-    msgs.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+    msgs
+      .map((m) => {
+        const c = normalizeAssistantContent(m.content);
+        return `${m.role.toUpperCase()}: ${c || ''}`;
+      })
+      .join('\n\n');
 
   if (USE_LM_STUDIO) {
     // Prefer OpenAI-compatible chat completions endpoint that LM Studio exposes
@@ -66,15 +200,30 @@ async function generateResponse(input = {}, options = {}) {
     // 1) Try OpenAI-compatible /v1/chat/completions
     try {
       const payload = {
-        model: LM_STUDIO_MODEL,
+        model: options.model || LM_STUDIO_MODEL,
         messages,
         max_tokens: options.max_tokens || 500,
         temperature: options.temperature ?? 1.0,
       };
+      // LM Studio rejects OpenAI's `{ type: 'json_object' }` (expects `json_schema` or `text` only).
+      if (options.response_format && typeof options.response_format === 'object') {
+        const t = options.response_format.type;
+        if (t === 'json_schema' || t === 'text') {
+          payload.response_format = options.response_format;
+        } else if (t === 'json_object') {
+          /* omit — prompts + server-side parse enforce JSON */
+        } else {
+          payload.response_format = options.response_format;
+        }
+      }
       const resp = await axios.post(`${base}/v1/chat/completions`, payload, { headers });
       const data = resp.data || {};
-      const content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? null;
+      const raw =
+        data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? null;
+      const content = normalizeAssistantContent(raw);
       if (content) return content;
+      const coercedRaw = coerceAssistantOutputToString(raw);
+      if (coercedRaw) return coercedRaw;
       // fallthrough if unexpected shape
     } catch (err) {
       lastGenerateFailureMessage = summarizeAxiosError(err);
@@ -86,7 +235,7 @@ async function generateResponse(input = {}, options = {}) {
     try {
       // LM Studio native endpoint often expects an `input` string rather than OpenAI-style `messages`.
       const payload = {
-        model: LM_STUDIO_MODEL,
+        model: options.model || LM_STUDIO_MODEL,
         input: messagesToPrompt(messages),
         /* LM Studio native /api/v1/chat may not accept OpenAI-style `max_tokens` parameter.
            Omit max_tokens to avoid unrecognized key errors; rely on model defaults or use server-side truncation. */
@@ -103,7 +252,8 @@ async function generateResponse(input = {}, options = {}) {
         (data.choices && data.choices[0]?.text) ||
         (data?.response && data.response?.generated_text) ||
         null;
-      if (result) return result;
+      const coerced = coerceAssistantOutputToString(result);
+      if (coerced) return coerced;
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       console.warn('LM Studio /api/v1/chat: no text in expected fields; response keys:', keys);
       lastGenerateFailureMessage =
@@ -126,12 +276,18 @@ async function generateResponse(input = {}, options = {}) {
       max_tokens: options.max_tokens || 500,
       temperature: options.temperature ?? 1.0,
     };
+    if (options.response_format && typeof options.response_format === 'object') {
+      payload.response_format = options.response_format;
+    }
     const headers = {
     Authorization: `Bearer ${process.env.DM_OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     };
     const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, { headers });
-    return resp.data?.choices?.[0]?.message?.content ?? null;
+    const raw = resp.data?.choices?.[0]?.message?.content ?? null;
+    return (
+      normalizeAssistantContent(raw) ?? coerceAssistantOutputToString(raw)
+    );
   };
 
   try {

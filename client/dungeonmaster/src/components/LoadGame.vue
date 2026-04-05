@@ -35,9 +35,13 @@ export default {
         },
     },
     async created() {
+        if (!this.$store.getters.isAuthenticated) {
+            this.loading = false;
+            return;
+        }
         this.loading = true;
         try {
-            const response = await axios.get('/api/game-state/all');
+            const response = await axios.get('/api/game-state/mine');
             const data = response.data;
             this.games = Array.isArray(data) ? data : [];
         } catch (error) {

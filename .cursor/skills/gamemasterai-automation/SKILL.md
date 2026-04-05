@@ -2,9 +2,9 @@
 name: dungeonmaster-automation
 description: >-
   Automate common Dungeon Master project tasks: maintain and update prompt
-  templates, enforce campaign-first flow (campaign → character → adventure),
-  add DM-only injections, update server/client code for prompt/template changes,
-  and create follow-up patches that implement requested feature work.
+  templates, enforce lobby-first multiplayer flow (party lobby → character sheets
+  + ready → server campaign + opening), add DM-only injections, update server/client
+  code for prompt/template changes, and create follow-up patches that implement requested feature work.
 ---
 
 # Dungeon Master Automation Skill
@@ -18,14 +18,14 @@ project. Typical triggers:
 - The user asks to change DM behavior in `server/routes/gameSession.js`.
 - The user requests new client behavior in `client/dungeonmaster/src/...`.
 - The user requests new Cursor rules or skills for persistent conventions.
- - The user requests enforcement of campaign-first generation (campaign -> character -> adventure).
+ - The user requests enforcement of lobby-first flow (characters + ready → automated campaign + opening).
 
 Apply this skill when you will:
 
 - Create or update prompt files (text templates used by Mustache).
 - Implement server-side logic to load/persist/inject `campaignSpec`.
-- Update API endpoints or the client flow to follow the campaign-first order
-  (campaign → character → adventure).
+- Update API endpoints or the client flow to follow the lobby-first order
+  (create-party → character per member → ready → `start-party-adventure`).
 - Add tests, logging, or env-configurable limits (token budgets, slice sizes).
 
 ## Quick Design Summary (current project state)
@@ -33,19 +33,21 @@ Apply this skill when you will:
 The repository currently contains the following notable items and conventions
 that this skill must respect and extend:
 
-- Server prompts (editable): `server/prompts/` including:
-  - `campaign_generator_prompt.txt` (policy + generator instructions)
-  - `json_output_guard.txt`, `no_prefatory_guard.txt` (output guards)
-  - `dm_inject_explore.txt`, `dm_inject_combat.txt` (DM injections)
+- Server prompts (editable): `server/prompts/` grouped as `core/`, `rules/`, `skills/`, `templates/dm/`, `templates/campaign/`.
+  - Campaign core: `templates/campaign/generator.txt` (build block + `---` + Mustache user slice); load via `loadCampaignGeneratorParts()` in `gameSession.js`.
+  - Guards: `rules/json_output_guard.txt`, `rules/no_prefatory_guard.txt`, etc.
+  - DM injections: `templates/dm/inject_explore.txt`, `templates/dm/inject_combat.txt`, etc.
 - Server routes: `server/routes/gameSession.js`
-  - Endpoints: `/generate`, `/generate-campaign-core`, `/generate-character`
+  - Endpoints: `/generate`, `/generate-campaign-core`, `/generate-character`, `/start-party-adventure`
+  - Game state: `POST /api/game-state/create-party`, `POST /api/game-state/party-ready`, `PATCH /api/game-state/party-premise`
   - Uses Mustache for rendering prompt templates via `loadPrompt(...)`
   - Persists `campaignSpec` and `rawModelOutput` in `GameState`
 -- Server model: `server/models/GameState.js` has `campaignSpec` and
   `rawModelOutput` fields (DM-only selectors on some)
-  - Client: `client/dungeonmaster/src/components/SetupForm.vue`
-  - Calls `/generate-campaign-core` first, then `/generate-character`
-  - Stores `campaignSpec` in initial saved state and uses campaign starter content (campaignConcept, majorConflicts, keyLocations) when composing the opening to compose the DM system message
+  - Client: `App.vue` “New game” → `POST /api/game-state/create-party` → `ChatRoom` lobby (premise, ready, character link); `SetupForm` is character-only when joining or when `gameSetup.party.phase` is `lobby`/`starting`.
+  - Optional host seed: `gameSetup.party.hostPremise` → Mustache `{{hostPremise}}` in `templates/campaign/generator.txt`.
+  - Late join after play: `gameSetup.party.pendingNarrativeIntroductionUserIds` + DM block `templates/dm/party_arrival.txt` (alias `dm_party_arrival.txt`); cleared on next successful `/generate` persist (`clearPendingNarrativeIntroductions` in `gameStatePersist.js`).
+  - Party context: `templates/dm/party_context.txt` (alias `dm_party_context.txt`).
 - Utilities:
   - `extractFirstJsonObject` robust JSON extraction for model output
   - `estimateTokenCount` and dynamic completion budgeting in `gameSession.js`
@@ -61,12 +63,10 @@ When invoked, perform the following, depending on the user's request:
    - Load `campaignSpec` for a given `gameId`.
   - Prepend rendered DM-only prompt templates to consolidated system messages
      (for modes: `initial`, `exploration`, `combat/decision/investigation`).
-   - Enforce campaign-first generation (require `campaignSpec` before
-     character generation) or optionally auto-generate campaign if user prefers.
-3. Update client flow (`SetupForm.vue`, `ChatRoom.vue`) to:
-   - Request campaign core first, persist returned `campaignSpec` to server.
-   - Pass `gameId` with subsequent `/generate-character` requests.
-  - Use campaign starter content (e.g., `campaignSpec.campaignConcept` or a majorConflict/keyLocation) when composing `systemMessageContentDM`.
+   - Keep `/generate` initial mode requiring persisted `campaignSpec` (lobby start path runs core + stages server-side before the first opening).
+3. Update client flow (`App.vue`, `SetupForm.vue`, `ChatRoom.vue`) to:
+   - Prefer `create-party` + lobby UI over host-driven `/generate-campaign-core` from setup.
+   - Pass `gameId` with `/generate-character`; use `/setup?joinGame=` for sheet editing from the lobby.
 4. Add/adjust guards and prompt precedence to ensure JSON-only outputs for
    campaign-core endpoints and avoid prefatory commentary.
 5. Persist raw model outputs in `GameState.rawModelOutput` for debugging.
@@ -110,7 +110,7 @@ Example server-side injection snippet (pseudo):
 
 ```js
 const spec = gs.campaignSpec;
-const tpl = loadPrompt('dm_inject_explore.txt');
+const tpl = loadPrompt('templates/dm/inject_explore.txt');
 const injected = Mustache.render(tpl, { factions: spec.factions.slice(0,3) });
 systemMsgs.unshift({ role: 'system', content: injected });
 ```
@@ -123,7 +123,7 @@ systemMsgs.unshift({ role: 'system', content: injected });
 - [ ] Update server logging to surface consolidated system messages (redacted).
 - [ ] Run `ReadLints` on server files edited.
 - [ ] Do not commit secrets or expose DM-only data to clients.
-- [ ] Ensure character generation requires `gameId` with `campaignSpec` present (unless user opts to auto-generate campaign).
+- [ ] For `/generate-character`, respect current policy: joiners need `gameId` or `newParty`; `campaignSpec` is optional (legacy games / in-progress setup).
 
 ## Follow-ups & Automation Capabilities
 
@@ -138,6 +138,39 @@ This skill can be extended to:
 
 - Always treat `campaignSpec` as DM-only. When logging, redact or truncate long fields.
  - Never write secrets into prompt files or skill files.
+
+## Authentication and multi-player
+
+### Investigation protocol (do not guess on join / wrong character / wrong buttons)
+
+When reports say **invitee sees the host’s character**, **solo “generate campaign” instead of Join party**, or **stale sheet after a new invite**:
+
+1. **Inspect the API contract first** — In DevTools (or logs), confirm `GET /api/game-state/load/:gameId` for the invitee’s session:
+   - `viewerIsGameOwner` must be **`false`** for non-host members when `ownerUserId` is set on the document.
+   - **`gameSetup.generatedCharacter`** is **not part of the API** (server omits it from load; sheets are only under `gameSetup.playerCharacters[userId]`). If a stray field appears, fix `server/routes/gameState.js` / client `setGameSetup` before changing Vue heuristics.
+2. **Inspect persist rules** — `POST /api/game-session/generate-character` writes the sheet under **`gameSetup.playerCharacters[requestingUserId]`** only. `persistGameStateFromBody` strips any `generatedCharacter` on save.
+3. **Only then** adjust client `SetupForm.vue` / `ChatRoom.vue` if the payload is already correct.
+
+Add or extend **tests** when changing this behavior: `server/test/apiGameState.integration.test.js` (load never exposes `generatedCharacter`).
+
+### Rules summary
+
+- **One party = one `gameId` string**: The host and every invitee use the **same** `GameState.gameId` (the value returned by `POST /api/auth/join` and shown in `/chat-room/:id`). There is no separate “party id” per player. If the client shows a different id (often a `Date.now()` string), **`createNewGame()` was called by mistake** while the store lost the real id — fix recovery from `?joinGame=`, `dm_join_ui_game_id`, or `dm_setup_game_id`, and **never** invent a new id in join context (`SetupForm.vue` `recoverSetupGameIdFromSession` / `isPartyJoinSetupContext`).
+- **Server-enforced access**: Every route that accepts a `gameId` must verify the caller is a member (`ownerUserId` or `memberUserIds` on `GameState`). Return **404** for non-members (avoid gameId enumeration). Do not rely on the UI hiding `gameId`.
+- **Explicit identity fields**: Pass `userId` (Mongo ObjectId string) and optional `displayName` in API payloads where needed—e.g. user chat lines as `{ role, content, userId?, displayName? }`. Do not infer player identity from free-text system messages (see workspace rule `avoid-fallback-workarounds.mdc`).
+- **Multi-client push (SSE)**: `GET /api/game-state/events/:gameId` is a **text/event-stream** (JWT via `?access_token=` because `EventSource` cannot always send `Authorization`). After `persistGameStateFromBody`, invite **join**, or **generate-character** sheet persist, the server emits `game-state-updated`; **`ChatRoom.vue`** (2+ party members) listens and **debounced `GET /load`**. Manual **Sync** and **visibility** debounced sync remain as fallbacks. **Nginx Proxy Manager:** step-by-step + paste-ready **Custom Nginx Configuration** in `server/env.example` (SSE `location` + AI timeouts). Same ideas apply to plain nginx. Full **WebSocket** is still optional if you need duplex or lower latency.
+- **Invite → character → chat**: Invite links are **`/join-party/:opaqueToken`** (public). Unauthenticated visitors get `dm_pending_invite` in `sessionStorage`; after sign-in, `App.vue` sends them to `JoinParty`, which sets `SESSION_CONSUME_INVITE` and `replace`s to `/setup` (no token in the URL). `SetupForm` consumes the session key, calls `POST /api/auth/join` with `{ inviteToken }`, then replaces the URL with `/setup?joinGame=:gameId`, runs join setup, then after confirm the client goes to `ChatRoomWithId`. `POST /api/game-session/generate-character` may merge `existingCampaignWorld` from DB when `campaignSpec` exists. `ChatRoom` redirects members without `playerCharacters[theirId]` to `/setup?joinGame=…` when `memberUserIds.length >= 2`.
+- **Multiplayer UI (chat)**: When **2+** party members are known, the chat header shows a **party roster** (character names from `playerCharacters`, “Host”, “you”, pending if no sheet yet) plus a short tip about sync / tab visibility.
+
+### Multiplayer roadmap (optional next steps)
+
+- **Done in repo**: Google auth, `ownerUserId` / `memberUserIds`, invites, join, per-user `playerCharacters`, DM party injection (`templates/dm/party_context.txt`), load omits `generatedCharacter`, **SSE** `GET /api/game-state/events/:gameId`, manual + visibility-based sync, party roster strip in `ChatRoom`.
+- **Later**: WebSocket (duplex / presence); **leave party** / owner kick; optional **privacy** (names-only for other PCs on load); “who is typing” if desired.
+- **Shared vs per-player data**: `campaignSpec` is shared and DM-only (use existing `redactCampaignSpecForClient`). Per-player sheets live under **`gameSetup.playerCharacters[userId]`** only.
+- **Campaign-first**: Unchanged for new games: campaign core still follows a saved character for that user; in multi-player, “character exists” means the **current user** has an entry in `playerCharacters`.
+- **Typical touch files** for auth/multi-player work: `server/models/User.js`, `server/models/GameState.js`, `server/routes/authRoutes.js`, `server/routes/gameState.js`, `server/routes/gameSession.js`, `server/gameStatePersist.js`, `server/prompts/templates/dm/party_context.txt` (party injection), `client/dungeonmaster/src/store.js`, `main.js`, `router.js`, `App.vue`, `ChooseNickname.vue`, `googleSignIn.js`, `LoadGame.vue`, `ChatRoom.vue`, `SetupForm.vue`.
+- **Nickname**: New accounts must set `nickname` (`PATCH /api/auth/nickname`); router enforces `/choose-nickname` until set. Optional `/change-nickname` and **Edit name** in the header; `refreshSessionUser` (`GET /api/auth/me`) syncs profile on app load.
+- **Docs & checks**: README “Google Sign-In and session JWT”; `server/env.example` and `client/dungeonmaster/env.example`; `npm test` in `server/` runs `node --test` on `server/test/**/*.test.js` (`gameAccess` + `apiGameState.integration`: mine/load, create-invite, join; supertest + mongodb-memory-server).
 
 ## Example Triggers (for agent)
 

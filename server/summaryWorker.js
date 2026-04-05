@@ -71,7 +71,7 @@ async function generateSummaryForGame(gameId) {
   if (!gameId || summaryLocks.has(gameId)) return null;
   summaryLocks.add(gameId);
   try {
-    const gs = await GameState.findOne({ gameId }).select('+conversation +summary +gameSetup');
+    const gs = await GameState.findOne({ gameId }).select('conversation summary gameSetup');
     if (!gs) return null;
 
     const language = (gs.gameSetup && gs.gameSetup.language) || 'English';
@@ -82,7 +82,8 @@ async function generateSummaryForGame(gameId) {
     // Do NOT use composeSystemMessages here: it pulls full DM systemCore (imminentCombat JSON, combat rules, length guard),
     // which conflicts with a short session summary and forces tiny max_tokens → truncation, meta chatter, and duplicate work
     // alongside the main /generate call after each save.
-    const langFile = language && language.toLowerCase().startsWith('span') ? 'language_spanish.txt' : 'language_english.txt';
+    const langFile =
+      language && language.toLowerCase().startsWith('span') ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
     let langPrompt = '';
     try {
       langPrompt = loadPrompt(langFile) || '';
@@ -129,7 +130,7 @@ async function generateSummaryForGame(gameId) {
           summaryLastRunTokenApprox: tok,
         },
       },
-      { upsert: true }
+      { upsert: false }
     );
     return String(aiSummary);
   } catch (e) {
