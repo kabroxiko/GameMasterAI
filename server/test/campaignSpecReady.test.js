@@ -11,6 +11,16 @@ test('hasSubstantiveCampaignSpec false for empty / missing', () => {
 
 test('hasSubstantiveCampaignSpec ignores dm-only key alone', () => {
   assert.strictEqual(hasSubstantiveCampaignSpec({ dmHiddenAdventureObjective: 'secret' }), false);
+  assert.strictEqual(
+    hasSubstantiveCampaignSpec({
+      creativeSeed: { titleMood: 'm', preferAngles: ['a'], avoidRepeatedFantasyTropesThisRun: ['b', 'c'] },
+    }),
+    false
+  );
+  assert.strictEqual(
+    hasSubstantiveCampaignSpec({ openingSceneFrame: { id: 'x', directive: 'y'.repeat(70) } }),
+    false
+  );
 });
 
 test('hasSubstantiveCampaignSpec true for title or stages', () => {

@@ -1,10 +1,9 @@
-{{{languageInstruction}}}
 Campaign stage: majorNPCs
 
 Based on this campaignConcept: {{campaignConcept}}
 
 Return ONLY a JSON array named "majorNPCs" where each item is an object with:
-- name (string) — **English** fantasy proper name (epic/invented; Latin alphabet), even when **role** and **briefDescription** follow **languageInstruction** for prose language. **Every major NPC must have a distinct name** (no duplicates; not the same as another entry ignoring spaces or letter case).
+- name (string) — **English** fantasy proper name (epic/invented; Latin alphabet), even when **role** and **briefDescription** follow the **session language policy** (system message) for prose language. **Every major NPC must have a distinct name** (no duplicates; not the same as another entry ignoring spaces or letter case).
 - role (string)
 - briefDescription (2 sentences)
 

@@ -9,7 +9,7 @@ const { assertGameMember, toObjectId, effectiveGameOwnerIdStr } = require('./ser
 const { mergePlayerCharacters, characterDisplayNameForUser } = require('./playerCharacterHelpers');
 const { hasSubstantiveCampaignSpec } = require('./campaignSpecReady');
 const { validateDistinctEntityNames } = require('./validateEntityNameUniqueness');
-const { mergeParty, canonicalMemberIdStrings } = require('./services/partyLobbyState');
+const { mergeParty, canonicalMemberIdStrings, getParty } = require('./services/partyLobbyState');
 
 function normalizeConversationUserDisplayNames(conversation, gameSetup, fallbackUserId) {
   if (!Array.isArray(conversation)) return conversation;
@@ -96,7 +96,15 @@ async function persistGameStateFromBody(body, options = {}) {
   }
 
   if (options.clearPendingNarrativeIntroductions === true) {
-    gameSetup = mergeParty(gameSetup, { pendingNarrativeIntroductionUserIds: [] });
+    const prevPending = existingFull
+      ? (getParty(existingFull.gameSetup).pendingNarrativeIntroductionUserIds || []).map(String)
+      : [];
+    const introducedSet = new Set((getParty(gameSetup).narrativeIntroducedUserIds || []).map(String));
+    for (const id of prevPending) introducedSet.add(id);
+    gameSetup = mergeParty(gameSetup, {
+      pendingNarrativeIntroductionUserIds: [],
+      narrativeIntroducedUserIds: [...introducedSet].filter(Boolean),
+    });
   }
 
   const conversationStored = normalizeConversationUserDisplayNames(

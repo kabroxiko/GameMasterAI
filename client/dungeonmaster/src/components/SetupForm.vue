@@ -1479,10 +1479,28 @@
             this.isStarting = true;
             let partyReadyTop = null;
             try {
-                const { data } = await axios.post('/api/game-state/party-ready', {
-                    gameId: gid0,
-                    ready: true,
-                });
+                const postPartyReady = () =>
+                    axios.post('/api/game-state/party-ready', {
+                        gameId: gid0,
+                        ready: true,
+                    });
+                let readyRes;
+                try {
+                    readyRes = await postPartyReady();
+                } catch (eFirst) {
+                    const c0 =
+                        eFirst.response && eFirst.response.data && eFirst.response.data.code;
+                    if (c0 === 'PARTY_READY_NEEDS_CHARACTER') {
+                        await new Promise((r) => setTimeout(r, 500));
+                        if (await this.hydrateConfirmStepFromServer()) {
+                            await this.$nextTick();
+                        }
+                        readyRes = await postPartyReady();
+                    } else {
+                        throw eFirst;
+                    }
+                }
+                const { data } = readyRes;
                 partyReadyTop = data;
                 if (data && data.gameSetup) {
                     this.$store.commit('setGameSetup', data.gameSetup);

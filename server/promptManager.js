@@ -166,6 +166,7 @@ function composeSystemMessages({ mode = 'exploration', sessionSummary = '', incl
     investigation: 'skills/investigation.txt',
     decision: 'skills/decision.txt',
     initial: 'skills/adventure_seed.txt',
+    exploration: 'skills/exploration.txt',
   };
 
   const skillFile = skillMap[mode];

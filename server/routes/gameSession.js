@@ -16,8 +16,14 @@ const { traceMessages } = require('../promptDebug');
 const Mustache = require('mustache');
 const crypto = require('crypto');
 const { persistGameStateFromBody, mergePersistWithAssistantReply } = require('../gameStatePersist');
+const { resolveOpeningMandateFromCampaign } = require('../services/openingFramePicker');
 const { normalizeCoinageObject } = require('../validatePlayerCharacter');
-const { redactCampaignSpecForClient } = require('../campaignSpecDmSecrets');
+const {
+  redactCampaignSpecForClient,
+  mergeCampaignSpecPreservingDmSecrets,
+  creativeSeedIsUsable,
+  buildInitialCampaignInjectSupplement,
+} = require('../campaignSpecDmSecrets');
 const { clearDraftPartyTtlIfCampaignNowSubstantive, applyDraftPartyTtlAfterCharacterGen } = require('../services/draftPartyTtl');
 const { requireAuth } = require('../middleware/requireAuth');
 const { assertGameMember, sendAccessError, toObjectId } = require('../services/gameAccess');
@@ -94,11 +100,18 @@ function estimateTokenCount(input) {
 
 /**
  * Consolidate an array of system/assistant messages into a single system-role string.
- * Priority: put strong guards (json output, no-prefatory) first to ensure precedence.
+ * Priority: strong guards first; optional short **dm_play_contract** tier immediately after guards (DM `/generate` only).
  */
-function consolidateSystemMessages(msgs = []) {
+function consolidateSystemMessages(msgs = [], options = {}) {
+  const { insertDmPlayContract = false } = options || {};
   try {
-    const guardKeys = ['OUTPUT FORMAT RULE', 'NO PREFATORY TEXT', 'NO PREFATORY', 'OUTPUT FORMAT'];
+    const guardKeys = [
+      'OUTPUT FORMAT RULE',
+      'NO PREFATORY TEXT',
+      'NO PREFATORY',
+      'OUTPUT FORMAT',
+      'DM reply envelope',
+    ];
     const guards = [];
     const others = [];
     for (const m of msgs) {
@@ -108,21 +121,130 @@ function consolidateSystemMessages(msgs = []) {
       else if (m.role === 'system') others.push(content.trim());
       // skip assistant-role contents to avoid few-shot priming
     }
-    // Remove duplicates while preserving order
-    const all = [...guards, ...others];
-    const seen = new Set();
-    const deduped = [];
-    for (const s of all) {
-      if (!s) continue;
-      if (!seen.has(s)) {
-        deduped.push(s);
-        seen.add(s);
+    const dedupeStrings = (arr) => {
+      const seen = new Set();
+      const out = [];
+      for (const s of arr) {
+        if (!s || !String(s).trim()) continue;
+        const t = String(s).trim();
+        if (!seen.has(t)) {
+          seen.add(t);
+          out.push(t);
+        }
+      }
+      return out;
+    };
+    const guardsDeduped = dedupeStrings(guards);
+    const othersDeduped = dedupeStrings(others);
+    let contractBlock = '';
+    if (insertDmPlayContract) {
+      try {
+        const c = loadPrompt('rules/dm_play_contract.txt');
+        if (c && String(c).trim()) contractBlock = String(c).trim();
+      } catch (e) {
+        console.warn('dm_play_contract.txt load failed:', e);
       }
     }
-    return deduped.join('\n\n');
+    const head = guardsDeduped.join('\n\n');
+    const tail = othersDeduped.join('\n\n');
+    if (contractBlock) {
+      return [head, contractBlock, tail].filter(Boolean).join('\n\n');
+    }
+    return [head, tail].filter(Boolean).join('\n\n');
   } catch (e) {
     return (Array.isArray(msgs) ? msgs.map(m => m.content || '').join('\n\n') : String(msgs || ''));
   }
+}
+
+/**
+ * JSON guards + session language only. Used for campaign pipeline stages so we do not inject
+ * the full generator template (unreplaced Mustache / duplicate core policy) into system.
+ */
+function buildCampaignStageSystemMsgs(language) {
+  const systemMsgs = [];
+  try {
+    const jsonGuard = loadPrompt('rules/json_output_guard.txt');
+    if (jsonGuard) systemMsgs.push({ role: 'system', content: jsonGuard });
+  } catch (e) {}
+  try {
+    const noPreface = loadPrompt('rules/no_prefatory_guard.txt');
+    if (noPreface) systemMsgs.push({ role: 'system', content: noPreface });
+  } catch (e) {}
+  try {
+    const langFile =
+      language && String(language).toLowerCase() === 'spanish'
+        ? 'rules/language_spanish.txt'
+        : 'rules/language_english.txt';
+    const langPrompt = loadPrompt(langFile);
+    if (langPrompt) systemMsgs.push({ role: 'system', content: langPrompt });
+  } catch (e) {}
+  return systemMsgs;
+}
+
+/**
+ * System stack for the campaign core JSON call after creativeSeed exists: guards, rendered
+ * build slice (with real creativeSeedJson), language. Excludes generator userTemplate.
+ */
+function buildCampaignCoreSystemMsgs(language, creativeSeedJson) {
+  const { buildContext } = loadCampaignGeneratorParts();
+  const seedSlice =
+    creativeSeedJson && String(creativeSeedJson).trim() ? String(creativeSeedJson).trim() : '{}';
+  const systemMsgs = [];
+  try {
+    const jsonGuard = loadPrompt('rules/json_output_guard.txt');
+    if (jsonGuard) systemMsgs.push({ role: 'system', content: jsonGuard });
+  } catch (e) {}
+  try {
+    const noPreface = loadPrompt('rules/no_prefatory_guard.txt');
+    if (noPreface) systemMsgs.push({ role: 'system', content: noPreface });
+  } catch (e) {}
+  try {
+    if (buildContext && String(buildContext).trim()) {
+      const renderedBuild = Mustache.render(buildContext, { creativeSeedJson: seedSlice });
+      systemMsgs.push({ role: 'system', content: renderedBuild });
+    }
+  } catch (e) {
+    console.warn('campaign core: build context render failed:', e);
+  }
+  try {
+    const langFile =
+      language && String(language).toLowerCase() === 'spanish'
+        ? 'rules/language_spanish.txt'
+        : 'rules/language_english.txt';
+    const langPrompt = loadPrompt(langFile);
+    if (langPrompt) systemMsgs.push({ role: 'system', content: langPrompt });
+  } catch (e) {}
+  return systemMsgs;
+}
+
+/**
+ * `language_*.txt` is often embedded inside Mustache-rendered slices; consolidateSystemMessages
+ * only removes duplicate *entire* system chunks. Strip embedded repeats and keep one copy at the end
+ * (still before scene grounding) so session language policy stays single and salient.
+ */
+function collapseDuplicateLanguagePolicyBlocks(consolidated, language) {
+  if (!consolidated || typeof consolidated !== 'string') return consolidated;
+  try {
+    const langFile =
+      language && String(language).toLowerCase() === 'spanish'
+        ? 'rules/language_spanish.txt'
+        : 'rules/language_english.txt';
+    const blob = loadPrompt(langFile);
+    if (!blob || typeof blob !== 'string') return consolidated;
+    const needle = blob.trim();
+    if (needle.length < 60) return consolidated;
+    const parts = consolidated.split(needle);
+    if (parts.length <= 2) return consolidated;
+    const collapsed = parts.join('').replace(/\n{3,}/g, '\n\n').trim();
+    return `${collapsed}\n\n${needle}`;
+  } catch (e) {
+    console.warn('collapseDuplicateLanguagePolicyBlocks:', e);
+    return consolidated;
+  }
+}
+
+function finalizeDmSystemPrompt(consolidated, language) {
+  return appendSceneGroundingPolicy(collapseDuplicateLanguagePolicyBlocks(consolidated, language));
 }
 
 /** Appended every /generate from disk (geography + no-menu closers). */
@@ -217,7 +339,11 @@ function tryParsePlayerCharacterWithBraceRepair(text) {
   return null;
 }
 
-/** Normalize curly/smart quotes so JSON.parse succeeds on model output. */
+/**
+ * Normalize curly/smart quotes so JSON.parse succeeds when models use them as **delimiters**.
+ * Do not apply this to valid JSON that already uses ASCII `"` for keys/strings: smart quotes **inside**
+ * a string value (e.g. Spanish “…” in backstory) would become ASCII `"` and break JSON.parse.
+ */
 function normalizeJsonLikeQuotes(s) {
   if (!s || typeof s !== 'string') return s;
   return s
@@ -649,16 +775,8 @@ function renderPlayerCharacterContextBlock(persistedGameState, language, request
     if (!gc || typeof gc !== 'object') return null;
     const tpl = loadPrompt('templates/dm/player_character_context.txt');
     if (!tpl) return null;
-    const langFile = language && String(language).toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-    let languageInstruction = '';
-    try {
-      languageInstruction = loadPrompt(langFile) || '';
-    } catch (e) {
-      /* ignore */
-    }
     const prior = (persistedGameState && persistedGameState.encounterState) || {};
     const main = Mustache.render(tpl, {
-      languageInstruction,
       language: language || 'English',
       playerCharacterDisplayName: displayNameFromCharacterSheet(gc),
       playerCharacterJson: JSON.stringify(gc).slice(0, 120000),
@@ -670,6 +788,27 @@ function renderPlayerCharacterContextBlock(persistedGameState, language, request
     console.warn('renderPlayerCharacterContextBlock failed:', e);
     return null;
   }
+}
+
+/** Short campaign spine for late-join DM block (no DM secrets). */
+function buildCampaignArrivalBriefForPending(spec) {
+  if (!spec || typeof spec !== 'object') return '';
+  const title = typeof spec.title === 'string' ? spec.title.trim() : '';
+  const concept =
+    typeof spec.campaignConcept === 'string' ? spec.campaignConcept.trim().slice(0, 480) : '';
+  const conflicts = takeCampaignFieldItems(spec.majorConflicts, 3)
+    .map((c) => String(c).trim().slice(0, 140))
+    .filter(Boolean);
+  const locs = coerceCampaignStageToArray('keyLocations', spec.keyLocations)
+    .slice(0, 2)
+    .map((l) => (l && l.name ? String(l.name).trim() : ''))
+    .filter(Boolean);
+  const lines = [];
+  if (title) lines.push(`Title: ${title}`);
+  if (concept) lines.push(`Premise: ${concept}`);
+  if (conflicts.length) lines.push(`Story pressures: ${conflicts.join(' · ')}`);
+  if (locs.length) lines.push(`Named places (hints): ${locs.join(', ')}`);
+  return lines.join('\n');
 }
 
 /** DM-only block when new PCs must be introduced mid-session (see partyLobbyState). */
@@ -690,14 +829,31 @@ function renderPendingPartyArrivalBlock(persistedGameState, language, stackMode)
       const sh = pcMap[uid];
       if (!sh || typeof sh !== 'object') continue;
       const name = displayNameFromCharacterSheet(sh);
-      const cls = [sh.class, sh.ancestry || sh.race].filter(Boolean).join(' ');
-      lines.push(`- ${name}${cls ? ` (${cls})` : ''}`);
+      const cls = sh.class || sh.characterClass;
+      const sub = sh.subclass || sh.subclassId;
+      const ancestry = sh.ancestry || sh.race;
+      const bits = [];
+      if (ancestry) bits.push(String(ancestry));
+      if (cls) bits.push(String(cls));
+      if (sub) bits.push(String(sub));
+      let meta = bits.length ? bits.join(', ') : '';
+      if (sh.level != null && !Number.isNaN(Number(sh.level))) {
+        const lv = Math.min(20, Math.max(1, Math.floor(Number(sh.level))));
+        meta = meta ? `${meta}; level ${lv}` : `level ${lv}`;
+      }
+      lines.push(`- ${name}${meta ? ` — ${meta}` : ''}`);
     }
     if (!lines.length) return null;
     const tpl = loadPrompt('templates/dm/party_arrival.txt');
     if (!tpl) return null;
+    const spec = persistedGameState.campaignSpec && typeof persistedGameState.campaignSpec === 'object'
+      ? persistedGameState.campaignSpec
+      : null;
+    const campaignArrivalBrief = buildCampaignArrivalBriefForPending(spec);
     return Mustache.render(tpl, {
       newPlayerSummaries: lines.join('\n'),
+      campaignArrivalBrief,
+      hasCampaignArrivalBrief: Boolean(campaignArrivalBrief && String(campaignArrivalBrief).trim()),
       language: language || 'English',
     });
   } catch (e) {
@@ -801,6 +957,8 @@ async function handleDmGenerate(req, res) {
 
     // Load persisted GameState for campaignSpec, character, mode, etc. DM rules always composed from prompt files each request.
     let persistedGameState = null;
+    /** Set when resolvedMode === 'initial': campaign-only opening mandate (no server fallback). */
+    let initialOpeningMandate = null;
     if (gameId) {
       try {
         const GameState = require('../models/GameState');
@@ -812,6 +970,39 @@ async function handleDmGenerate(req, res) {
         }
       } catch (e) {
         console.warn('Failed to load GameState for generate:', e);
+      }
+    }
+
+    if (resolvedMode === 'initial' && gameId) {
+      if (!persistedGameState || !persistedGameState.campaignSpec) {
+        return res.status(500).json({
+          error: 'Could not load campaign state for this game. Try again.',
+          code: 'GAME_STATE_LOAD_FAILED',
+        });
+      }
+      initialOpeningMandate = resolveOpeningMandateFromCampaign(persistedGameState.campaignSpec);
+      if (!initialOpeningMandate) {
+        try {
+          const GameState = require('../models/GameState');
+          await GameState.findOneAndUpdate(
+            { gameId },
+            {
+              $set: {
+                llmCallError:
+                  'OPENING_FRAME_MISSING: campaignSpec.openingSceneFrame missing or failed validation (directive too short or absent).',
+                llmCallCompletedAt: new Date().toISOString(),
+              },
+            },
+            { upsert: false }
+          );
+        } catch (pe) {
+          console.warn('Failed to persist OPENING_FRAME_MISSING diagnostic:', pe);
+        }
+        return res.status(422).json({
+          error:
+            'This campaign has no valid opening scene frame. The host must run full campaign generation again (lobby start or generate-campaign-core with all stages, including the opening-frame stage).',
+          code: 'OPENING_FRAME_MISSING',
+        });
       }
     }
 
@@ -854,7 +1045,8 @@ async function handleDmGenerate(req, res) {
     const stackMode = userCombatEntry ? 'exploration' : resolvedMode;
 
     // Compose full core from prompt files (sessionSummary, mode, skills). Combat turns need full skill_combat when stackMode is combat.
-    const includeFullSkillThisTurn = includeFullSkill || stackMode === 'combat';
+    const includeFullSkillThisTurn =
+      includeFullSkill || stackMode === 'combat' || stackMode === 'exploration';
     let systemMsgs = composeSystemMessages({
       mode: stackMode,
       sessionSummary: sessionSummaryToUse,
@@ -879,6 +1071,28 @@ async function handleDmGenerate(req, res) {
           }
           systemMsgs.push({ role: 'system', content: advSeed });
         }
+        if (gameId && initialOpeningMandate) {
+          try {
+            const mandateTpl = loadPrompt('templates/dm/opening_frame_mandate.txt');
+            if (!mandateTpl || !String(mandateTpl).trim()) {
+              return res.status(500).json({
+                error: 'Server misconfiguration: opening_frame_mandate.txt is missing or empty.',
+                code: 'OPENING_FRAME_MANDATE_TEMPLATE_MISSING',
+              });
+            }
+            const mandateBody = Mustache.render(mandateTpl, {
+              openingFrameId: initialOpeningMandate.id,
+              openingFrameDirective: initialOpeningMandate.directive,
+            });
+            systemMsgs.push({ role: 'system', content: mandateBody });
+          } catch (mandateErr) {
+            console.warn('Failed to render opening_frame_mandate.txt:', mandateErr);
+            return res.status(500).json({
+              error: 'Failed to compose opening frame mandate for the model.',
+              code: 'OPENING_FRAME_MANDATE_RENDER_FAILED',
+            });
+          }
+        }
       } catch (e) {
         console.warn('Failed to load skills/adventure_seed.txt for initial mode:', e);
       }
@@ -894,16 +1108,22 @@ async function handleDmGenerate(req, res) {
         if (stackMode === 'initial' && spec) {
           injectTemplate = loadPrompt('templates/dm/inject_initial.txt');
           campaignInjectionKind = 'opening scene';
+          const supplement = buildInitialCampaignInjectSupplement(spec);
+          const tone =
+            typeof spec.toneAndStyle === 'string' && spec.toneAndStyle.trim()
+              ? spec.toneAndStyle.trim().slice(0, 600)
+              : '';
           renderData = {
             campaignTitle: typeof spec.title === 'string' ? spec.title.trim() : '',
             campaignConcept: spec.campaignConcept || '',
+            campaignToneAndStyle: tone,
             factions: coerceCampaignStageToArray('factions', spec.factions).slice(0, 3),
             majorConflicts: takeCampaignFieldItems(spec.majorConflicts, 4),
             majorNPCs: coerceCampaignStageToArray('majorNPCs', spec.majorNPCs).slice(0, 4),
             keyLocations: coerceCampaignStageToArray('keyLocations', spec.keyLocations).slice(0, 4),
             dmHiddenAdventureObjective: dmHiddenAdventureObjectiveForPrompt(spec),
-            // Compact JSON saves prompt tokens; do not inject rawModelOutput here (stale/truncated LLM blobs poison opening turns).
-            campaignSpecJson: JSON.stringify(spec || {}),
+            campaignSpecSupplementJson: JSON.stringify(supplement),
+            campaignSpecSupplementHasContent: Object.keys(supplement).length > 0,
             sessionSummary: persistedGameState.summary || sessionSummary || '',
           };
         } else if ((stackMode === 'exploration' || stackMode === 'explore') && spec) {
@@ -924,11 +1144,6 @@ async function handleDmGenerate(req, res) {
         }
 
         if (injectTemplate) {
-          try {
-            const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-            const langPrompt = loadPrompt(langFile);
-            if (langPrompt) renderData.languageInstruction = langPrompt;
-          } catch (e) {}
           const injected = Mustache.render(injectTemplate, renderData);
           systemMsgs.unshift({ role: 'system', content: injected });
         }
@@ -964,16 +1179,9 @@ async function handleDmGenerate(req, res) {
       try {
         const handoffTpl = loadPrompt('templates/dm/combat_entry_handoff.txt');
         if (handoffTpl) {
-          const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-          let languageInstruction = '';
-          try {
-            languageInstruction = loadPrompt(langFile) || '';
-          } catch (e) {
-            /* ignore */
-          }
           systemMsgs.push({
             role: 'system',
-            content: Mustache.render(handoffTpl, { languageInstruction, language }),
+            content: Mustache.render(handoffTpl, { language }),
           });
         }
       } catch (e) {
@@ -987,13 +1195,17 @@ async function handleDmGenerate(req, res) {
     }
 
     // Consolidate all system messages into one system-role prompt to ensure guard precedence
-    let consolidatedSystem = appendSceneGroundingPolicy(consolidateSystemMessages(systemMsgs));
+    let consolidatedSystem = finalizeDmSystemPrompt(
+      consolidateSystemMessages(systemMsgs, { insertDmPlayContract: true }),
+      language
+    );
     const messagesToSend = [{ role: 'system', content: consolidatedSystem }, ...inboundMessagesForModel];
     const dmPromptTraceParts = [
       `composed DM rules core (play mode: ${stackMode})`,
       ...(sessionSummaryToUse ? ['session recap in system stack'] : []),
-      ...(stackMode === 'initial' ? ['opening scene seed'] : []),
+      ...(stackMode === 'initial' ? ['opening scene seed', ...(gameId ? ['campaign opening frame mandate'] : [])] : []),
       ...(campaignInjectionKind ? [`campaign world injection (${campaignInjectionKind})`] : []),
+      ...(pendingArrivalBlock ? ['pending late-join PC narrative introduction'] : []),
       ...(userCombatEntry ? ['combat entry handoff (empty narration)'] : []),
       ...(serverPlayBeatSocial ? [`server play beat: AI intent (${playerIntent.source})`] : []),
     ];
@@ -1009,7 +1221,9 @@ async function handleDmGenerate(req, res) {
     // Use central generateResponse (handles model selection and fallbacks)
     try {
         // Dynamically estimate prompt size and compute a safe completion token budget.
-        // Default 16k matches common chat models; override with DM_MODEL_CONTEXT_TOKENS for your deployment.
+        // Default 16k matches common chat models (e.g. gpt-3.5-turbo-16k). If you use a larger
+        // context window, set DM_MODEL_CONTEXT_TOKENS so estimates and completion budgets align
+        // with your deployment (see log line "model context cap" vs "Estimated prompt tokens").
         const MODEL_MAX_TOKENS = Math.min(
           128000,
           Math.max(4096, parseInt(process.env.DM_MODEL_CONTEXT_TOKENS || '16384', 10) || 16384)
@@ -1124,13 +1338,6 @@ async function handleDmGenerate(req, res) {
         if (combatStackNeeded) {
           try {
             console.log('Detected imminentCombat=true; re-running with combat campaign injection + skill_combat.');
-            const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-            let langPromptCombat = '';
-            try {
-              langPromptCombat = loadPrompt(langFile) || '';
-            } catch (e) {
-              /* ignore */
-            }
 
             let redoSystemMsgs = composeSystemMessages({
               mode: 'combat',
@@ -1146,7 +1353,7 @@ async function handleDmGenerate(req, res) {
                 const renderData = {
                   majorNPCs: takeCampaignFieldItems(spec.majorNPCs, 4),
                   majorConflicts: takeCampaignFieldItems(spec.majorConflicts, 4),
-                  languageInstruction: langPromptCombat,
+                  dmHiddenAdventureObjective: dmHiddenAdventureObjectiveForPrompt(spec),
                 };
                 redoSystemMsgs.unshift({
                   role: 'system',
@@ -1160,6 +1367,11 @@ async function handleDmGenerate(req, res) {
               redoSystemMsgs.push({ role: 'system', content: pcRedoCtx });
             }
 
+            const pendingArrivalRedo = renderPendingPartyArrivalBlock(persistedGameState, language, 'combat');
+            if (pendingArrivalRedo) {
+              redoSystemMsgs.push({ role: 'system', content: pendingArrivalRedo });
+            }
+
             try {
               const jsonGuardRedo =
                 loadPrompt('rules/json_output_guard_dm_play.txt') || loadPrompt('rules/json_output_guard.txt');
@@ -1170,7 +1382,10 @@ async function handleDmGenerate(req, res) {
               console.warn('Failed to prepend JSON guard / envelope to combat redo stack:', e);
             }
 
-            const consolidatedWithCombat = appendSceneGroundingPolicy(consolidateSystemMessages(redoSystemMsgs));
+            const consolidatedWithCombat = finalizeDmSystemPrompt(
+              consolidateSystemMessages(redoSystemMsgs, { insertDmPlayContract: true }),
+              language
+            );
 
             const combatHandoffText =
               language && String(language).toLowerCase().startsWith('span')
@@ -1397,64 +1612,61 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
 
     console.log('Prepper is Processing the following messages (campaign generation)');
 
-    const { buildContext, userTemplate } = loadCampaignGeneratorParts();
+    const { userTemplate } = loadCampaignGeneratorParts();
     if (!userTemplate || !String(userTemplate).trim()) {
       console.error('Missing required prompt: server/prompts/templates/campaign/generator.txt');
       return res.status(500).json({ error: 'Server misconfiguration: templates/campaign/generator.txt is required' });
     }
 
-    const systemMsgs = [];
-    try {
-      const jsonGuard = loadPrompt('rules/json_output_guard.txt');
-      if (jsonGuard) systemMsgs.push({ role: 'system', content: jsonGuard });
-    } catch (e) {
-      console.warn('json_output_guard.txt missing or failed to load:', e);
-    }
-    try {
-      const noPreface = loadPrompt('rules/no_prefatory_guard.txt');
-      if (noPreface) systemMsgs.push({ role: 'system', content: noPreface });
-    } catch (e) {
-      console.warn('no_prefatory_guard.txt missing or failed to load:', e);
-    }
-    try {
-      if (buildContext) systemMsgs.push({ role: 'system', content: buildContext });
-    } catch (e) {
-      console.warn('campaign generator build context slice failed:', e);
-    }
-    try {
-      const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-      const langPrompt = loadPrompt(langFile);
-      if (langPrompt) systemMsgs.push({ role: 'system', content: langPrompt });
-    } catch (e) {
-      // ignore
-    }
-    try {
-      systemMsgs.push({ role: 'system', content: userTemplate });
-    } catch (e) {
-      console.warn('campaign generator policy slice (system) failed:', e);
+    const gameIdForCampaign = req.body.gameId || req.query.gameId || null;
+    const hostPremiseLegacy =
+      req.body.hostPremise != null && String(req.body.hostPremise).trim()
+        ? String(req.body.hostPremise).trim().slice(0, 2000)
+        : '';
+    if (gameIdForCampaign) {
+      try {
+        await assertGameMember(req.userId, gameIdForCampaign);
+      } catch (e) {
+        return sendAccessError(res, e);
+      }
     }
 
-    // Render campaign user slice (same text file as system priming; Mustache fills sessionSummary / language).
-    let languageInstructionForTemplate = '';
+    const stageTimeoutMsLegacy = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+    let seedDrawLegacy;
     try {
-      const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-      const langPrompt = loadPrompt(langFile);
-      if (langPrompt) languageInstructionForTemplate = langPrompt;
-    } catch (e) {
-      // ignore
+      const seedPromise = generateCampaignCreativeSeedStage({
+        gameId: gameIdForCampaign,
+        language,
+        hostPremise: hostPremiseLegacy,
+        persist: Boolean(gameIdForCampaign),
+      });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsLegacy)
+      );
+      seedDrawLegacy = await Promise.race([seedPromise, timeoutPromise]);
+    } catch (err) {
+      console.error('creativeSeed stage failed or timed out (generate-campaign):', err);
+      seedDrawLegacy = { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_TIMEOUT' };
     }
+    if (!seedDrawLegacy.ok) {
+      return res.status(500).json({
+        error: 'Failed generating campaign creative-seed stage',
+        code: seedDrawLegacy.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
+      });
+    }
+    const creativeSeedJsonLegacy = JSON.stringify(seedDrawLegacy.seed).slice(0, 8000);
+
     const rendered = Mustache.render(userTemplate, {
       sessionSummary: '',
-      languageInstruction: languageInstructionForTemplate,
       language,
-      hostPremise: '',
+      hostPremise: hostPremiseLegacy,
+      creativeSeedJson: creativeSeedJsonLegacy,
     });
     const userInstruction = { role: 'user', content: rendered };
 
-    // Language is handled via prompt files loaded by promptManager; no hardcoded language rules here.
-
-    // Consolidate system messages into a single system-role prompt to reduce role drift and priming
-    const consolidatedCampaignSystem = consolidateSystemMessages(systemMsgs);
+    const consolidatedCampaignSystem = consolidateSystemMessages(
+      buildCampaignCoreSystemMsgs(language, creativeSeedJsonLegacy)
+    );
     const messagesToSend = [{ role: 'system', content: consolidatedCampaignSystem }, userInstruction];
     const campaignOutbound = traceMessages(
       messagesToSend,
@@ -1484,7 +1696,10 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
           );
         }
         console.log(`Campaign generator: prompt tokens ${promptTokensCampaign}, completion budget ${completionBudgetCampaign}`);
-        const aiMessage = await generateResponse({ messages: campaignOutbound }, { max_tokens: completionBudgetCampaign, temperature: 0.8, gameId });
+        const aiMessage = await generateResponse(
+          { messages: campaignOutbound },
+          { max_tokens: completionBudgetCampaign, temperature: 0.8, gameId: gameIdForCampaign }
+        );
         if (!aiMessage) {
           return res.status(500).json({ error: 'AI response was empty or failed (see server logs).' });
         }
@@ -1522,7 +1737,13 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
             }
             const GameState = require('../models/GameState');
             const update = {};
-            if (parsed) update.campaignSpec = parsed;
+            if (parsed) {
+              const existingGs = await GameState.findOne({ gameId: gameIdToPersist }).select('campaignSpec').lean();
+              update.campaignSpec = mergeCampaignSpecPreservingDmSecrets(
+                existingGs && existingGs.campaignSpec,
+                parsed
+              );
+            }
             update.rawModelOutput = String(aiMessage).slice(0, 200000); // cap size
             await GameState.findOneAndUpdate({ gameId: gameIdToPersist }, update, { upsert: false, new: true });
             if (parsed) await clearDraftPartyTtlIfCampaignNowSubstantive(gameIdToPersist);
@@ -1542,7 +1763,7 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
 
 // New: generate only core campaign spec (small, reliable output)
 router.post('/generate-campaign-core', requireAuth, async (req, res) => {
-  const { gameId = null, waitForStages = true, language = 'English' } = req.body;
+  const { gameId = null, waitForStages = true, language = 'English', hostPremise: hostPremiseBody = '' } = req.body;
   setLongRequestSocketTimeout(req);
   console.log('Campaign core generator called');
   try {
@@ -1554,68 +1775,48 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
   // World-only: never use client gameSetup, sessionSummary, or character data for core generation.
   const sessionSummaryForCore = '';
 
-  const { buildContext, userTemplate } = loadCampaignGeneratorParts();
+  const { userTemplate } = loadCampaignGeneratorParts();
   if (!userTemplate || !String(userTemplate).trim()) {
     return res.status(500).json({ error: 'Server misconfiguration: templates/campaign/generator.txt is required' });
   }
 
-  // Prepare system messages (guards + core guidance).
-  // Do NOT append composeSystemMessages(mode: 'initial'): core/system.txt describes the in-play DM JSON
-  // envelope (narration, imminentCombat, …) and conflicts with campaign core + stage outputs, causing
-  // malformed model JSON and 500s when stages fail to parse.
-  const systemMsgs = [];
+  const hostPremiseTrimCore =
+    hostPremiseBody && String(hostPremiseBody).trim() ? String(hostPremiseBody).trim().slice(0, 2000) : '';
+  const stageTimeoutMsCore = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+  let seedDrawCore;
   try {
-    const jsonGuard = loadPrompt('rules/json_output_guard.txt');
-    if (jsonGuard) systemMsgs.push({ role: 'system', content: jsonGuard });
-  } catch (e) {}
-  try {
-    const noPreface = loadPrompt('rules/no_prefatory_guard.txt');
-    if (noPreface) systemMsgs.push({ role: 'system', content: noPreface });
-  } catch (e) {}
-  try {
-    if (buildContext) systemMsgs.push({ role: 'system', content: buildContext });
-  } catch (e) {
-    console.warn('campaign generator build context slice failed:', e);
+    const seedPromise = generateCampaignCreativeSeedStage({
+      gameId,
+      language,
+      hostPremise: hostPremiseTrimCore,
+      persist: Boolean(gameId),
+    });
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsCore)
+    );
+    seedDrawCore = await Promise.race([seedPromise, timeoutPromise]);
+  } catch (err) {
+    console.error('creativeSeed stage failed or timed out (campaign-core):', err);
+    seedDrawCore = { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_TIMEOUT' };
   }
-  // Ensure language prompt is high-priority for core campaign generation as well
-  try {
-    const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-    const langPrompt = loadPrompt(langFile);
-    if (langPrompt) systemMsgs.push({ role: 'system', content: langPrompt });
-  } catch (e) {
-    // ignore
+  if (!seedDrawCore.ok) {
+    return res.status(500).json({
+      error: 'Failed generating campaign creative-seed stage',
+      code: seedDrawCore.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
+    });
   }
-  try {
-    systemMsgs.push({ role: 'system', content: userTemplate });
-  } catch (e) {
-    console.warn('campaign generator policy slice (system) failed:', e);
-  }
+  const creativeSeedJsonCore = JSON.stringify(seedDrawCore.seed).slice(0, 8000);
 
-  // If there is a stored campaignSpec for this game, prioritize system guards and base messages.
-  if (gameId) {
-    try {
-      const GameState = require('../models/GameState');
-      const gs = await GameState.findOne({ gameId }).select('campaignSpec');
-      // Campaign core is the authoritative kickstarter.
-    } catch (e) {
-      console.warn('Failed to load GameState for core generation:', e);
-    }
-  }
+  const coreSystemMsgs = buildCampaignCoreSystemMsgs(language, creativeSeedJsonCore);
+  const consolidated = consolidateSystemMessages(coreSystemMsgs);
 
-  const consolidated = consolidateSystemMessages(systemMsgs);
   let userPromptRendered = null;
   try {
-    const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-    let languageInstructionForTemplate = '';
-    try {
-      const langPrompt = loadPrompt(langFile);
-      if (langPrompt) languageInstructionForTemplate = langPrompt;
-    } catch (e) { /* ignore */ }
     userPromptRendered = Mustache.render(userTemplate, {
       sessionSummary: sessionSummaryForCore,
-      languageInstruction: languageInstructionForTemplate,
       language,
-      hostPremise: '',
+      hostPremise: hostPremiseTrimCore,
+      creativeSeedJson: creativeSeedJsonCore,
     });
   } catch (e) {
     console.error('Failed rendering campaign generator prompt template:', e);
@@ -1679,7 +1880,7 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
       console.log(`Stage timeout is ${STAGE_TIMEOUT}ms`);
       async function runStageWithTimeout(stageName) {
         try {
-          const stagePromise = generateCampaignStage({ gameId, stage: stageName, campaignCore: parsed, systemMsgs, language });
+          const stagePromise = generateCampaignStage({ gameId, stage: stageName, campaignCore: parsed, language });
           const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('stage_timeout')), STAGE_TIMEOUT));
           const result = await Promise.race([stagePromise, timeoutPromise]);
           return result;
@@ -1696,6 +1897,22 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
         if (!ok2) return res.status(500).json({ error: 'Failed generating majorNPCs stage' });
         const ok3 = await runStageWithTimeout('keyLocations');
         if (!ok3) return res.status(500).json({ error: 'Failed generating keyLocations stage' });
+        async function runOpeningFrameStageWithTimeoutCore() {
+          try {
+            const p = generateCampaignOpeningFrameStage({ gameId, language });
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('stage_timeout')), STAGE_TIMEOUT)
+            );
+            return await Promise.race([p, timeoutPromise]);
+          } catch (err) {
+            console.error('openingSceneFrame stage failed or timed out:', err);
+            return false;
+          }
+        }
+        const ok4 = await runOpeningFrameStageWithTimeoutCore();
+        if (!ok4) {
+          return res.status(500).json({ error: 'Failed generating opening scene frame stage' });
+        }
         console.log('Completed synchronous campaign stages for', gameId);
         // At this point stages persisted their outputs. Now persist the full campaignSpec (core + stages) atomically.
         try {
@@ -1738,9 +1955,15 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
       setImmediate(() => {
         (async () => {
           try {
-            await generateCampaignStage({ gameId, stage: 'factions', campaignCore: parsed, systemMsgs, language });
-            await generateCampaignStage({ gameId, stage: 'majorNPCs', campaignCore: parsed, systemMsgs, language });
-            await generateCampaignStage({ gameId, stage: 'keyLocations', campaignCore: parsed, systemMsgs, language });
+            await generateCampaignStage({ gameId, stage: 'factions', campaignCore: parsed, language });
+            await generateCampaignStage({ gameId, stage: 'majorNPCs', campaignCore: parsed, language });
+            await generateCampaignStage({ gameId, stage: 'keyLocations', campaignCore: parsed, language });
+            const okOpen = await generateCampaignOpeningFrameStage({ gameId, language });
+            if (!okOpen) {
+              console.error(
+                `openingSceneFrame background stage failed for gameId=${gameId}; initial /generate will return OPENING_FRAME_MISSING until campaign is regenerated with all stages.`
+              );
+            }
             console.log('Completed background campaign stages for', gameId);
           } catch (e) {
             console.error('Background campaign stages failed:', e);
@@ -1757,7 +1980,7 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
 // Removed separate plot endpoint — campaign generation is the single kickstarter
 
 // Helper to generate and persist a campaign stage (background, not blocking response)
-async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, language }) {
+async function generateCampaignStage({ gameId, stage, campaignCore, language }) {
   try {
     console.log(`Starting campaign stage generation: ${stage} for gameId=${gameId}`);
     // Build a focused user prompt per stage, preferring prompt files under server/prompts/.
@@ -1775,13 +1998,6 @@ async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, 
     try {
       const tpl = loadPrompt(templateFile);
       if (tpl) {
-        // include languageInstruction for template rendering
-        const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-        let languageInstructionForTemplate = '';
-        try {
-          const langPrompt = loadPrompt(langFile);
-          if (langPrompt) languageInstructionForTemplate = langPrompt;
-        } catch (e) {}
         const conceptText =
           (campaignCore &&
             (typeof campaignCore.campaignConcept === 'string'
@@ -1793,7 +2009,6 @@ async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, 
           '';
         userPrompt = Mustache.render(tpl, {
           campaignConcept: conceptText,
-          languageInstruction: languageInstructionForTemplate,
           language,
         });
       } else {
@@ -1824,14 +2039,14 @@ async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, 
       return;
     }
 
-    const consolidated = consolidateSystemMessages(systemMsgs);
+    const consolidated = consolidateSystemMessages(buildCampaignStageSystemMsgs(language));
     const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
     const stageTrace =
       stage === 'factions'
-        ? 'campaign build stage: factions JSON; inherits core-generation system stack'
+        ? 'campaign build stage: factions JSON; minimal guards + language system stack'
         : stage === 'majorNPCs'
-          ? 'campaign build stage: major NPCs JSON; inherits core-generation system stack'
-          : 'campaign build stage: key locations JSON; inherits core-generation system stack';
+          ? 'campaign build stage: major NPCs JSON; minimal guards + language system stack'
+          : 'campaign build stage: key locations JSON; minimal guards + language system stack';
     const stageOutbound = traceMessages(messagesToSend, stageTrace);
     // Log the exact messages being sent to the model for debugging (redactable if needed).
     try {
@@ -1902,6 +2117,248 @@ async function generateCampaignStage({ gameId, stage, campaignCore, systemMsgs, 
   }
 }
 
+function normalizeCreativeSeed(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const titleMood = typeof raw.titleMood === 'string' ? raw.titleMood.trim().slice(0, 400) : '';
+  const namingNote =
+    typeof raw.namingNote === 'string' ? raw.namingNote.trim().slice(0, 600) : '';
+  const preferAngles = Array.isArray(raw.preferAngles)
+    ? raw.preferAngles.map((x) => String(x).trim()).filter(Boolean).slice(0, 8).map((s) => s.slice(0, 200))
+    : [];
+  const avoidRepeatedFantasyTropesThisRun = Array.isArray(raw.avoidRepeatedFantasyTropesThisRun)
+    ? raw.avoidRepeatedFantasyTropesThisRun
+        .map((x) => String(x).trim())
+        .filter(Boolean)
+        .slice(0, 12)
+        .map((s) => s.slice(0, 120))
+    : [];
+  const out = { titleMood, preferAngles, avoidRepeatedFantasyTropesThisRun };
+  if (namingNote) out.namingNote = namingNote;
+  return out;
+}
+
+/**
+ * Before campaign core: model draws a one-off creative steer; optional persist to campaignSpec.creativeSeed (DM-only).
+ * Uses a minimal system stack (JSON guards + language), not the full generator template.
+ * @returns {Promise<{ ok: true, seed: object } | { ok: false, code?: string }>}
+ */
+async function generateCampaignCreativeSeedStage({ gameId, language, hostPremise, persist }) {
+  try {
+    const hostPremiseTrim =
+      hostPremise && String(hostPremise).trim() ? String(hostPremise).trim().slice(0, 2000) : '';
+    const tpl = loadPrompt('templates/campaign/stage_creativeSeed.txt');
+    if (!tpl || !String(tpl).trim()) {
+      console.warn('creativeSeed stage: templates/campaign/stage_creativeSeed.txt missing');
+      return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_TEMPLATE' };
+    }
+    const userPrompt = Mustache.render(tpl, {
+      language,
+      hostPremise: hostPremiseTrim,
+    });
+    const consolidated = consolidateSystemMessages(buildCampaignStageSystemMsgs(language));
+    const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
+    const outbound = traceMessages(messagesToSend, 'campaign build stage: creativeSeed JSON object');
+    try {
+      console.log('OUTGOING (stage:creativeSeed) messagesToSend:', JSON.stringify(outbound, null, 2));
+    } catch (e) {
+      console.log('OUTGOING (stage:creativeSeed) messagesToSend (could not stringify):', outbound);
+    }
+    const aiMessage = await generateResponse(
+      { messages: outbound },
+      { max_tokens: 550, temperature: 0.95, gameId: gameId || undefined }
+    );
+    if (!aiMessage) {
+      console.warn('creativeSeed stage: empty model response');
+      return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_EMPTY' };
+    }
+    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
+    let parsedObj = null;
+    try {
+      parsedObj = JSON.parse(rawJson);
+    } catch (e) {
+      console.warn('creativeSeed stage: JSON.parse failed:', e);
+      if (persist && gameId) {
+        try {
+          const GameState = require('../models/GameState');
+          await GameState.findOneAndUpdate(
+            { gameId },
+            { rawModelOutput: String(aiMessage).slice(0, 200000) },
+            { upsert: true, new: true }
+          );
+        } catch (pe) {
+          console.warn('Failed saving rawModelOutput for creativeSeed parse failure:', pe);
+        }
+      }
+      return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PARSE' };
+    }
+    let rawSeed = parsedObj && parsedObj.creativeSeed;
+    if (!creativeSeedIsUsable(normalizeCreativeSeed(rawSeed)) && creativeSeedIsUsable(normalizeCreativeSeed(parsedObj))) {
+      rawSeed = parsedObj;
+    }
+    const seed = normalizeCreativeSeed(rawSeed);
+    if (!creativeSeedIsUsable(seed)) {
+      console.warn('creativeSeed stage: invalid or missing creativeSeed object');
+      if (persist && gameId) {
+        try {
+          const GameState = require('../models/GameState');
+          await GameState.findOneAndUpdate(
+            { gameId },
+            { rawModelOutput: String(aiMessage).slice(0, 200000) },
+            { upsert: true, new: true }
+          );
+        } catch (pe) {
+          console.warn('Failed saving rawModelOutput for creativeSeed validation failure:', pe);
+        }
+      }
+      return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_INVALID' };
+    }
+    if (persist && gameId) {
+      try {
+        const GameState = require('../models/GameState');
+        await GameState.findOneAndUpdate(
+          { gameId },
+          {
+            $set: {
+              'campaignSpec.creativeSeed': seed,
+              rawModelOutput: String(aiMessage).slice(0, 200000),
+            },
+          },
+          { upsert: false, new: true }
+        );
+        console.log(`Persisted campaignSpec.creativeSeed for gameId=${gameId}`);
+      } catch (e) {
+        console.warn('Failed persisting creativeSeed stage:', e);
+        return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PERSIST' };
+      }
+    }
+    return { ok: true, seed };
+  } catch (e) {
+    console.error('generateCampaignCreativeSeedStage failed:', e);
+    return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_EXCEPTION' };
+  }
+}
+
+/**
+ * After keyLocations: model chooses a varied first-scene frame; stored at campaignSpec.openingSceneFrame (DM-only).
+ * @returns {Promise<boolean>}
+ */
+async function generateCampaignOpeningFrameStage({ gameId, language }) {
+  const { openingSceneFrameIsUsable } = require('../campaignSpecDmSecrets');
+  try {
+    const GameState = require('../models/GameState');
+    const doc = await GameState.findOne({ gameId }).select('campaignSpec').lean();
+    const spec = doc && doc.campaignSpec;
+    if (!spec || typeof spec !== 'object') {
+      console.warn('openingSceneFrame stage: missing campaignSpec');
+      return false;
+    }
+    const locs = coerceCampaignStageToArray('keyLocations', spec.keyLocations);
+    if (!locs.length) {
+      console.warn('openingSceneFrame stage: no keyLocations');
+      return false;
+    }
+    const compact = {
+      title: spec.title,
+      campaignConcept: spec.campaignConcept,
+      majorConflicts: takeCampaignFieldItems(spec.majorConflicts, 6),
+      toneAndStyle: spec.toneAndStyle,
+      factions: coerceCampaignStageToArray('factions', spec.factions).slice(0, 5),
+      majorNPCs: coerceCampaignStageToArray('majorNPCs', spec.majorNPCs).slice(0, 5),
+      keyLocations: locs.slice(0, 8),
+    };
+    let campaignContextJson = '{}';
+    try {
+      campaignContextJson = JSON.stringify(compact).slice(0, 12000);
+    } catch (e) {
+      console.warn('openingSceneFrame stage: JSON.stringify failed:', e);
+      return false;
+    }
+    const tpl = loadPrompt('templates/campaign/stage_openingSceneFrame.txt');
+    if (!tpl || !String(tpl).trim()) {
+      console.warn('openingSceneFrame stage: templates/campaign/stage_openingSceneFrame.txt missing');
+      return false;
+    }
+    const userPrompt = Mustache.render(tpl, {
+      language,
+      campaignContextJson,
+    });
+    const consolidated = consolidateSystemMessages(buildCampaignStageSystemMsgs(language));
+    const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
+    const outbound = traceMessages(messagesToSend, 'campaign build stage: openingSceneFrame JSON object');
+    try {
+      console.log('OUTGOING (stage:openingSceneFrame) messagesToSend:', JSON.stringify(outbound, null, 2));
+    } catch (e) {
+      console.log('OUTGOING (stage:openingSceneFrame) messagesToSend (could not stringify):', outbound);
+    }
+    const aiMessage = await generateResponse(
+      { messages: outbound },
+      { max_tokens: 700, temperature: 0.92, gameId }
+    );
+    if (!aiMessage) {
+      console.warn('openingSceneFrame stage: empty model response');
+      return false;
+    }
+    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
+    let parsedObj = null;
+    try {
+      parsedObj = JSON.parse(rawJson);
+    } catch (e) {
+      console.warn('openingSceneFrame stage: JSON.parse failed:', e);
+      try {
+        await GameState.findOneAndUpdate(
+          { gameId },
+          { rawModelOutput: String(aiMessage).slice(0, 200000) },
+          { upsert: true, new: true }
+        );
+      } catch (pe) {
+        console.warn('Failed saving rawModelOutput for openingSceneFrame parse failure:', pe);
+      }
+      return false;
+    }
+    let frame = parsedObj && parsedObj.openingSceneFrame;
+    if (!openingSceneFrameIsUsable(frame) && openingSceneFrameIsUsable(parsedObj)) {
+      frame = parsedObj;
+    }
+    if (!openingSceneFrameIsUsable(frame)) {
+      console.warn('openingSceneFrame stage: invalid or missing openingSceneFrame object');
+      try {
+        await GameState.findOneAndUpdate(
+          { gameId },
+          { rawModelOutput: String(aiMessage).slice(0, 200000) },
+          { upsert: true, new: true }
+        );
+      } catch (pe) {
+        console.warn('Failed saving rawModelOutput for openingSceneFrame validation failure:', pe);
+      }
+      return false;
+    }
+    let idStr = typeof frame.id === 'string' && frame.id.trim() ? frame.id.trim().slice(0, 48) : 'campaign_opening';
+    idStr = idStr.replace(/[^\w-]/g, '_').slice(0, 48) || 'campaign_opening';
+    const directive = String(frame.directive).trim().slice(0, 4000);
+    try {
+      await GameState.findOneAndUpdate(
+        { gameId },
+        {
+          $set: {
+            'campaignSpec.openingSceneFrame': { id: idStr, directive },
+            rawModelOutput: String(aiMessage).slice(0, 200000),
+          },
+        },
+        { upsert: false, new: true }
+      );
+      await clearDraftPartyTtlIfCampaignNowSubstantive(gameId);
+      console.log(`Persisted campaignSpec.openingSceneFrame for gameId=${gameId}`);
+    } catch (e) {
+      console.warn('Failed persisting openingSceneFrame stage:', e);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('generateCampaignOpeningFrameStage failed:', e);
+    return false;
+  }
+}
+
 /**
  * Campaign core + synchronous stages for lobby party start (same behavior as POST /generate-campaign-core with waitForStages).
  * @returns {Promise<{ ok: true, combined: object } | { ok: false, status: number, error: string, code?: string, raw?: string, detail?: string }>}
@@ -1917,7 +2374,7 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
   const hostPremiseTrim =
     hostPremise && String(hostPremise).trim() ? String(hostPremise).trim().slice(0, 2000) : '';
 
-  const { buildContext, userTemplate } = loadCampaignGeneratorParts();
+  const { userTemplate } = loadCampaignGeneratorParts();
   if (!userTemplate || !String(userTemplate).trim()) {
     return {
       ok: false,
@@ -1927,45 +2384,43 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
     };
   }
 
-  const systemMsgs = [];
+  const stageTimeoutMsEarly = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+  let seedDrawLobby;
   try {
-    const jsonGuard = loadPrompt('rules/json_output_guard.txt');
-    if (jsonGuard) systemMsgs.push({ role: 'system', content: jsonGuard });
-  } catch (e) {}
-  try {
-    const noPreface = loadPrompt('rules/no_prefatory_guard.txt');
-    if (noPreface) systemMsgs.push({ role: 'system', content: noPreface });
-  } catch (e) {}
-  try {
-    if (buildContext) systemMsgs.push({ role: 'system', content: buildContext });
-  } catch (e) {
-    console.warn('campaign generator build context slice failed:', e);
-  }
-  try {
-    const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-    const langPrompt = loadPrompt(langFile);
-    if (langPrompt) systemMsgs.push({ role: 'system', content: langPrompt });
-  } catch (e) {}
-  try {
-    systemMsgs.push({ role: 'system', content: userTemplate });
-  } catch (e) {
-    console.warn('campaign generator policy slice (system) failed:', e);
-  }
-
-  const consolidated = consolidateSystemMessages(systemMsgs);
-  let userPromptRendered = null;
-  try {
-    const langFile = language && language.toLowerCase() === 'spanish' ? 'rules/language_spanish.txt' : 'rules/language_english.txt';
-    let languageInstructionForTemplate = '';
-    try {
-      const langPrompt = loadPrompt(langFile);
-      if (langPrompt) languageInstructionForTemplate = langPrompt;
-    } catch (e) {}
-    userPromptRendered = Mustache.render(userTemplate, {
-      sessionSummary: sessionSummaryForCore,
-      languageInstruction: languageInstructionForTemplate,
+    const seedPromise = generateCampaignCreativeSeedStage({
+      gameId,
       language,
       hostPremise: hostPremiseTrim,
+      persist: true,
+    });
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsEarly)
+    );
+    seedDrawLobby = await Promise.race([seedPromise, timeoutPromise]);
+  } catch (err) {
+    console.error('creativeSeed stage failed or timed out (lobby):', err);
+    seedDrawLobby = { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_TIMEOUT' };
+  }
+  if (!seedDrawLobby.ok) {
+    return {
+      ok: false,
+      status: 500,
+      error: 'Failed generating campaign creative-seed stage',
+      code: seedDrawLobby.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
+    };
+  }
+  const creativeSeedJsonLobby = JSON.stringify(seedDrawLobby.seed).slice(0, 8000);
+
+  const coreSystemMsgsLobby = buildCampaignCoreSystemMsgs(language, creativeSeedJsonLobby);
+  const consolidated = consolidateSystemMessages(coreSystemMsgsLobby);
+
+  let userPromptRendered = null;
+  try {
+    userPromptRendered = Mustache.render(userTemplate, {
+      sessionSummary: sessionSummaryForCore,
+      language,
+      hostPremise: hostPremiseTrim,
+      creativeSeedJson: creativeSeedJsonLobby,
     });
   } catch (e) {
     console.error('Failed rendering lobby campaign generator prompt template:', e);
@@ -2040,7 +2495,6 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
           gameId,
           stage: stageName,
           campaignCore: parsed,
-          systemMsgs,
           language,
         });
         const timeoutPromise = new Promise((_, reject) =>
@@ -2064,6 +2518,28 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
     const ok3 = await runStageWithTimeout('keyLocations');
     if (!ok3) {
       return { ok: false, status: 500, error: 'Failed generating keyLocations stage', code: 'CAMPAIGN_STAGE_LOCATIONS' };
+    }
+
+    async function runOpeningFrameStageWithTimeout() {
+      try {
+        const p = generateCampaignOpeningFrameStage({ gameId, language });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('stage_timeout')), STAGE_TIMEOUT)
+        );
+        return await Promise.race([p, timeoutPromise]);
+      } catch (err) {
+        console.error('openingSceneFrame stage failed or timed out:', err);
+        return false;
+      }
+    }
+    const ok4 = await runOpeningFrameStageWithTimeout();
+    if (!ok4) {
+      return {
+        ok: false,
+        status: 500,
+        error: 'Failed generating opening scene frame stage',
+        code: 'CAMPAIGN_STAGE_OPENING_FRAME',
+      };
     }
 
     const GameState = require('../models/GameState');
@@ -2307,23 +2783,37 @@ router.post('/generate-character', requireAuth, async (req, res) => {
     }
 
     function tryParsePlayerCharacterBlob(text) {
-      const cleaned = normalizeJsonLikeQuotes(stripMarkdownJsonFence(String(text || '')));
-      const jsonText = extractFirstJsonObject(cleaned);
-      if (jsonText) {
-        try {
-          const o = JSON.parse(jsonText);
-          if (o && typeof o === 'object' && o.playerCharacter && typeof o.playerCharacter === 'object') {
-            return o;
+      const rawIn = String(text || '');
+      const baseClean = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownJsonFence(rawIn)));
+
+      function parseFromCleaned(cleaned) {
+        if (!cleaned || typeof cleaned !== 'string') return null;
+        const jsonText = extractFirstJsonObject(cleaned);
+        if (jsonText) {
+          try {
+            const o = JSON.parse(jsonText);
+            if (o && typeof o === 'object' && o.playerCharacter && typeof o.playerCharacter === 'object') {
+              return o;
+            }
+          } catch (pe) {
+            console.warn('JSON.parse failed on character generator blob:', pe?.message || pe);
           }
-        } catch (pe) {
-          console.warn('JSON.parse failed on character generator blob:', pe?.message || pe);
+          const lenient = jsonParseLenientObject(jsonText);
+          if (lenient?.playerCharacter && typeof lenient.playerCharacter === 'object') return lenient;
+          const repaired = tryParsePlayerCharacterWithBraceRepair(jsonText);
+          if (repaired) return repaired;
         }
-        const lenient = jsonParseLenientObject(jsonText);
-        if (lenient?.playerCharacter && typeof lenient.playerCharacter === 'object') return lenient;
-        const repaired = tryParsePlayerCharacterWithBraceRepair(jsonText);
-        if (repaired) return repaired;
+        return tryParsePlayerCharacterWithBraceRepair(cleaned);
       }
-      return tryParsePlayerCharacterWithBraceRepair(cleaned);
+
+      let out = parseFromCleaned(baseClean);
+      if (out) return out;
+      const normalized = normalizeJsonLikeQuotes(baseClean);
+      if (normalized !== baseClean) {
+        out = parseFromCleaned(normalized);
+        if (out) return out;
+      }
+      return null;
     }
 
     const parsed = tryParsePlayerCharacterBlob(aiMessage);

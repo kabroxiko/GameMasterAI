@@ -1,4 +1,3 @@
-{{{languageInstruction}}}
 COMBAT ENTRY — HANDOFF TURN (DM-only; do not show this heading to the player):
 
 The latest player message declares an attack or otherwise starts committed violence, and the full D&D 5e combat procedure is NOT loaded on this request. The server will run a follow-up request with combat rules.

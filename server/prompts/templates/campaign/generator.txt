@@ -4,9 +4,18 @@ Campaign metadata builder (this is NOT an in-play Dungeon Master turn):
 - Do NOT use the live-play DM reply envelope: no top-level "narration", "imminentCombat", "combatCue", or encounter blocks unless the user message explicitly asks for them (it will not).
 - Do NOT wrap JSON in markdown code fences and do not add prose before or after the JSON.
 
+**Creative seed (when the JSON below is non-empty):** The server ran a **prior** model pass that produced a **one-off** steering object for **this** campaign only. That JSON is **authoritative** for this request:
+- Obey **titleMood** when shaping the player-facing **title** (mood, not literal wording).
+- Let **preferAngles** visibly shape `campaignConcept`, `majorConflicts`, `toneAndStyle`, and `dmHiddenAdventureObjective`.
+- Treat **avoidRepeatedFantasyTropesThisRun** as a **hard skip list** for the **title** and the conceptual spine (the model that wrote the list chose different items each generation — follow them).
+- Apply **namingNote** when it is present (internal guidance for evocative, non-repetitive naming).
+If **creativeSeed** is missing or the block is literally `{}`, still produce a distinctive campaign without that prior draw.
+
+**creativeSeed (JSON):**
+{{creativeSeedJson}}
+
 ---
 
-{{{languageInstruction}}}
 Campaign core policy (DM-ONLY):
 - **World-only task:** The server does **not** supply player characters, `gameSetup`, or backstory for this request. `sessionSummary` is intentionally empty. Invent **only** setting-scale premise: no PC names, no “the hero who…”, no assumed class/race.
 - Produce a concise campaign core only: include "title" (short player-facing campaign name), "campaignConcept" (2 sentences), "majorConflicts" (3-5 short strings), "toneAndStyle" (1-2 adjectives), and "dmHiddenAdventureObjective" (DM-only string). Keep outputs minimal and focused.
@@ -19,7 +28,7 @@ Host/table premise (optional; may be empty — if non-empty, use as a creative s
 Instructions:
 - OUTPUT ONLY valid JSON (no surrounding markdown or commentary).
 - The JSON MUST be a single object containing the following top-level keys (exact names required):
-  1) "title" (string): a short, evocative **fantasy** campaign name for players (roughly 2–8 words), in the **same language as languageInstruction** — **Spanish sessions:** Spanish title (evocative fantasy register, natural for game lists); **English sessions:** English title. Do **not** force an English title in Spanish mode. No mundane real-world person/city names as the title. No colon-separated subtitles; no full sentences. Other string fields follow **languageInstruction** for prose language.
+  1) "title" (string): a short, evocative **fantasy** campaign name for players (roughly 2–8 words), in the **same language as the session language policy** (system message) — **Spanish sessions:** Spanish title (evocative fantasy register, natural for game lists); **English sessions:** English title. Do **not** force an English title in Spanish mode. No mundane real-world person/city names as the title. No colon-separated subtitles; no full sentences. Honor **creativeSeed** avoid-list and mood when that JSON is present; otherwise prefer concrete, memorable hooks (place, institution, paradox, oath, relic). Other string fields follow that same session language policy for prose language.
   2) "campaignConcept" (string): a concise, 2-sentence high-level summary of the campaign's core premise and stakes (world-level — politics, religion, factions, crises). Do NOT include narrative prose or an opening scene here.
   3) "majorConflicts" (array of short strings): short descriptions of 3–5 ongoing large-scale conflicts or tensions that drive the campaign.
   4) "toneAndStyle" (string): 1–2 short adjectives describing voice and tone. Do NOT provide examples or sample adjectives.

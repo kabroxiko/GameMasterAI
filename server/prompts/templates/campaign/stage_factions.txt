@@ -1,10 +1,9 @@
-{{{languageInstruction}}}
 Campaign stage: factions
 
 Based on this campaignConcept: {{campaignConcept}}
 
 Return ONLY a JSON array named "factions" where each item is an object with:
-- name (string) — **English** fantasy faction name, even when other fields follow **languageInstruction**
+- name (string) — **English** fantasy faction name, even when other fields follow the **session language policy** (system message); prefer specific, institutional, or regional labels over generic ominous compounds unless the campaignConcept already centers that tone
 - goal (1-2 sentences)
 - resources (1 sentence)
 - currentDisposition (1 sentence about attitude toward outsiders, travelers, or the local power balance — not toward a named player character)

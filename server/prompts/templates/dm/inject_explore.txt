@@ -1,4 +1,3 @@
-{{{languageInstruction}}}
 DM-ONLY EXPLORATION GUIDANCE (do NOT reveal to players):
 
 Hidden adventure objective (DM-only — never state this to the player as a mission briefing):
@@ -11,8 +10,8 @@ Relevant factions (brief):
 
 Use these to subtly steer descriptions, NPC motives, and available leads during exploration. Never present leads as explicit choices to players. When the player pursues actions that clearly advance the hidden objective (or established leads tied to it), the world may respond with meaningful friction, clues, or NPC agendas that fit the campaign.
 
-Vary mood with **specific** sensory and social detail from this world. **Do not** introduce **anonymous hooded / encapuchado figures** who only **watch from the crowd edge**—**hard ban** as tension shorthand. Prefer **named roles**, **heard speech**, **visible insignia**, or **small concrete incidents**.
+Vary mood with **specific** sensory and social detail from this world (core/style + scene grounding cover anti-pattern tension clichés).
 
-When the player’s actions are unrelated to that through-line or to what fiction has already established, do **not** invent a new adventure, mystery, prophecy, ambush, or “strange coincidence” to entertain them. Resolve their action with ordinary, plausible outcomes: dull errands finish dully, wrong turns waste time, NPCs are indifferent or transactional, places are unremarkable, rumors do not appear on demand. The world does not reorganize around every whim. They can return to the thread whenever they engage prior hooks or locations already in play.
+When the player’s actions are **unrelated** to established fiction **and** the hidden through-line, do **not** spawn a **new** serialized plot from nothing. **Exception:** when they engage **what is already in the scene** (NPCs, objects, stakes from prior narration), **advance that situation** with plausible friction, requests, or reveals—still **ordinary** in tone when it fits, but not a dead stop. Tangents elsewhere stay mundane until the table returns to prior hooks.
 
 Continuity: nothing becomes true until narration or fair in-character knowledge supports it. If the player names something unknown to the PC or unstated in fiction, do not grant it or leak it through detail—one scene beat or one check, no bulleted menus.

@@ -6,13 +6,14 @@
  *   readyUserIds: string[],       // Mongo user id strings
  *   hostPremise: string,          // optional seed for campaign generator (owner-editable)
  *   pendingNarrativeIntroductionUserIds: string[],
+ *   narrativeIntroducedUserIds: string[], // PCs whose late-join intro was completed (persist after DM turn)
  *   lastStartError: string | null,
  *   lastStartAt: string | null, // ISO
  * }
  */
 
 const { hasSubstantiveCampaignSpec } = require('../campaignSpecReady');
-const { validateGeneratedPlayerCharacter } = require('../validatePlayerCharacter');
+const { validateGeneratedPlayerCharacter, ensurePlayerCharacterSheetDefaults } = require('../validatePlayerCharacter');
 
 function defaultParty() {
   return {
@@ -20,6 +21,7 @@ function defaultParty() {
     readyUserIds: [],
     hostPremise: '',
     pendingNarrativeIntroductionUserIds: [],
+    narrativeIntroducedUserIds: [],
     lastStartError: null,
     lastStartAt: null,
   };
@@ -49,18 +51,48 @@ function canonicalMemberIdStrings(doc) {
   return [...out];
 }
 
-function sheetLooksValid(sheet) {
+/**
+ * Same normalization as GET /game-state/load (gameStateDocForClient) before validating, so lobby gates
+ * match what clients see and what /generate-character persists after ensurePlayerCharacterSheetDefaults.
+ */
+function sheetLooksValid(sheet, language) {
   if (!sheet || typeof sheet !== 'object') return false;
-  const v = validateGeneratedPlayerCharacter(sheet);
+  const lang =
+    language != null && String(language).trim() !== '' ? String(language).trim() : 'English';
+  let normalized;
+  try {
+    normalized = ensurePlayerCharacterSheetDefaults(sheet, { language: lang });
+  } catch (_) {
+    return false;
+  }
+  const v = validateGeneratedPlayerCharacter(normalized);
   return v.ok === true;
+}
+
+/** Resolve a member's sheet when the map key might not match strict bracket lookup (Mixed / driver quirks). */
+function resolvePlayerCharacterSheet(pcMap, userIdStr) {
+  const uid = userIdStr != null ? String(userIdStr) : '';
+  if (!uid || !pcMap || typeof pcMap !== 'object' || Array.isArray(pcMap)) return null;
+  const direct = pcMap[uid];
+  if (direct && typeof direct === 'object') return direct;
+  for (const k of Object.keys(pcMap)) {
+    if (String(k) === uid && pcMap[k] && typeof pcMap[k] === 'object') return pcMap[k];
+  }
+  return null;
+}
+
+function gameSetupLanguage(doc) {
+  const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
+  return gs.language && String(gs.language).trim() !== '' ? String(gs.language).trim() : 'English';
 }
 
 function allMembersHaveValidSheets(doc) {
   const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
   const pcMap = gs.playerCharacters && typeof gs.playerCharacters === 'object' && !Array.isArray(gs.playerCharacters) ? gs.playerCharacters : {};
   const ids = canonicalMemberIdStrings(doc);
+  const lang = gameSetupLanguage(doc);
   for (const id of ids) {
-    if (!sheetLooksValid(pcMap[id])) return false;
+    if (!sheetLooksValid(resolvePlayerCharacterSheet(pcMap, id), lang)) return false;
   }
   return ids.length > 0;
 }
@@ -74,7 +106,8 @@ function memberHasValidSheetForUserId(doc, userIdStr) {
     gs.playerCharacters && typeof gs.playerCharacters === 'object' && !Array.isArray(gs.playerCharacters)
       ? gs.playerCharacters
       : {};
-  return sheetLooksValid(pcMap[uid]);
+  const sheet = resolvePlayerCharacterSheet(pcMap, uid);
+  return sheetLooksValid(sheet, gameSetupLanguage(doc));
 }
 
 function allMembersReady(party, doc) {

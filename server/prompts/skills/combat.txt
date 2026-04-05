@@ -1,4 +1,3 @@
-{{{languageInstruction}}}
 For normal chat turns, the server strips JSON: put everything the player reads in the envelope "narration" field (markdown allowed there). Use "imminentCombat"/"combatCue" only as hidden server fields, never explained to the player.
 
 Starting or resuming formal combat (D&D 5e):

@@ -37,7 +37,10 @@
                 </span>
             </li>
             <li v-for="row in lobbyMemberRows" :key="row.id" class="party-lobby__item">
-                <span class="party-lobby__name">{{ row.display }}</span>
+                <div class="party-lobby__identity">
+                    <span class="party-lobby__name">{{ row.display }}</span>
+                    <span v-if="row.detailsLine" class="party-lobby__meta">{{ row.detailsLine }}</span>
+                </div>
                 <span class="party-lobby__flags">
                     <span class="party-lobby__flag-cell" :class="row.hasSheet ? 'ok' : 'miss'">{{
                         row.hasSheet ? $i18n.lobby_sheet_ok : $i18n.lobby_sheet_missing
@@ -98,7 +101,8 @@
                 </div>
                 <ul class="party-roster__list">
                     <li v-for="row in partyRosterRows" :key="row.id" class="party-roster__item" :class="{ 'party-roster__item--you': row.isYou }">
-                        {{ row.display }}
+                        <span class="party-roster__name">{{ row.display }}</span>
+                        <span v-if="row.detailsLine" class="party-roster__meta">{{ row.detailsLine }}</span>
                     </li>
                 </ul>
                 <p class="party-roster__tip">{{ $i18n.party_sync_tip }}</p>
@@ -375,7 +379,8 @@ export default {
                     let display = label;
                     if (isYou) display += ` (${this.$i18n.party_you})`;
                     if (isHost) display += ` — ${this.$i18n.party_host}`;
-                    return { id, display, isYou, isHost };
+                    const detailsLine = this.formatPartyMemberSheetSummary(sheet);
+                    return { id, display, detailsLine, isYou, isHost };
                 });
             },
             /**
@@ -536,15 +541,18 @@ export default {
                 });
                 return ids.map((id) => {
                     const hasSheet = this.memberHasCommittedSheet(id);
+                    const sheet = this.pickPlayerCharacterFromStore(id);
                     const primary = this.memberPrimaryLabel(id);
                     const isYou = Boolean(uid && id === uid);
                     const isHost = Boolean(owner && id === owner);
                     let display = primary;
                     if (isYou) display += ` (${this.$i18n.party_you})`;
                     if (isHost) display += ` — ${this.$i18n.party_host}`;
+                    const detailsLine = hasSheet ? this.formatPartyMemberSheetSummary(sheet) : '';
                     return {
                         id,
                         display,
+                        detailsLine,
                         hasSheet,
                         isReady: ready.has(id),
                     };
@@ -666,6 +674,51 @@ export default {
         },
 
         methods: {
+            /** Same id/label resolution as FloatingCard (race/class lists from $i18n). */
+            localizePartySheetField(value, list) {
+                if (value == null || value === '') return '';
+                const raw = String(value).trim();
+                const id = raw.toLowerCase().replace(/_/g, '-').replace(/\s+/g, '-');
+                const found = (list || []).find((x) => x.id === id);
+                return found ? found.label : raw;
+            },
+            localizePartySubclassLabel(subRaw) {
+                const s = String(subRaw || '').trim();
+                if (!s || s.toLowerCase() === 'random') return '';
+                const labels = this.$i18n.subclass_labels || {};
+                const keyUnderscore = s.toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_');
+                if (labels[keyUnderscore]) return labels[keyUnderscore];
+                return s;
+            },
+            /** Race · class · subclass — Level n (localized); empty if no sheet fields. */
+            formatPartyMemberSheetSummary(sheet) {
+                if (!sheet || typeof sheet !== 'object') return '';
+                const race = this.localizePartySheetField(sheet.race, this.$i18n.races || []);
+                const clsRaw =
+                    sheet.class != null && String(sheet.class).trim()
+                        ? sheet.class
+                        : sheet.characterClass;
+                const cls = this.localizePartySheetField(clsRaw, this.$i18n.classes || []);
+                const subRaw =
+                    sheet.subclass != null && String(sheet.subclass).trim()
+                        ? sheet.subclass
+                        : sheet.subclassId;
+                const sub = this.localizePartySubclassLabel(subRaw);
+                const lv =
+                    sheet.level != null && !Number.isNaN(Number(sheet.level))
+                        ? Math.min(20, Math.max(1, Math.floor(Number(sheet.level))))
+                        : null;
+                const parts = [];
+                if (race) parts.push(race);
+                if (cls) parts.push(cls);
+                if (sub) parts.push(sub);
+                let line = parts.join(' · ');
+                if (lv != null) {
+                    const lp = this.$i18n.level_prefix || 'Level ';
+                    line = line ? `${line} — ${lp}${lv}` : `${lp}${lv}`;
+                }
+                return line;
+            },
             pickPlayerCharacterFromStore(memberId) {
                 const id = memberId != null ? String(memberId) : '';
                 if (!id) return null;
@@ -834,10 +887,13 @@ export default {
                     }, 350);
                 };
                 ws.onclose = () => {
-                    if (this.gameStateWebSocket === ws) {
-                        this.gameStateWebSocket = null;
-                        this.gameStateWebSocketGameId = null;
+                    // If this socket was already replaced (stopGameStateWebSocket + new WebSocket), ignore:
+                    // avoids duplicate reconnect timers and clearing pushSyncTimer owned by the new socket.
+                    if (this.gameStateWebSocket !== ws) {
+                        return;
                     }
+                    this.gameStateWebSocket = null;
+                    this.gameStateWebSocketGameId = null;
                     if (this.pushSyncTimer) {
                         clearTimeout(this.pushSyncTimer);
                         this.pushSyncTimer = null;
@@ -1521,7 +1577,28 @@ export default {
   }
 
   .party-roster__item {
-    margin: 2px 0;
+    margin: 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    align-items: flex-start;
+  }
+
+  .party-roster__name {
+    display: inline;
+  }
+
+  .party-roster__meta {
+    display: block;
+    font-size: 0.78rem;
+    line-height: 1.3;
+    opacity: 0.82;
+    font-weight: 400;
+    color: var(--gm-muted, #9a8f85);
+  }
+
+  .party-roster__item--you .party-roster__meta {
+    color: rgba(212, 180, 106, 0.75);
   }
 
   .party-roster__item--you {
@@ -1726,11 +1803,27 @@ export default {
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
+    align-items: flex-start;
     gap: 8px 12px;
     padding: 10px 12px;
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .party-lobby__identity {
+    flex: 1 1 140px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .party-lobby__meta {
+    font-size: 0.8rem;
+    line-height: 1.3;
+    opacity: 0.82;
+    color: var(--gm-muted, #9a8f85);
   }
   .party-lobby__item--head {
     padding: 6px 12px 4px;

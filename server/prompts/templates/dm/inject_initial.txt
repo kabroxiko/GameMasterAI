@@ -1,7 +1,6 @@
-{{{languageInstruction}}}
 DM-ONLY INITIAL ADVENTURE CONTEXT (do NOT reveal to players):
 
-**How to read this block:** The **lists and JSON below** (campaign facts, hidden objective, raw `campaignSpecJson`) are **DM-only**—never paste them into `narration`. **How** to open the scene (frames, geography, weather, surroundings, situational context) lives in the separate **adventure-seed** system block: follow that block so **`narration`** **shows** dónde, clima/luz, alrededores, and **in-scene** situation early—those are **player-visible**, not secret.
+**How to read this block:** The **lists and optional small JSON below** (campaign facts, hidden objective, creative-seed supplement) are **DM-only**—never paste them into `narration`. **How** to open the scene (frames, geography, weather, surroundings, situational context) lives in the separate **adventure-seed** system block: follow that block so **`narration`** **shows** dónde, clima/luz, alrededores, and **in-scene** situation early—those are **player-visible**, not secret.
 
 Campaign title (for your orientation only; do not read aloud as a label to players unless it fits naturally):
 {{campaignTitle}}
@@ -9,6 +8,11 @@ Campaign title (for your orientation only; do not read aloud as a label to playe
 Campaign concept:
 {{campaignConcept}}
 
+{{#campaignToneAndStyle}}
+Tone and style:
+{{campaignToneAndStyle}}
+
+{{/campaignToneAndStyle}}
 Relevant factions (brief):
 {{#factions}}
 - {{name}} — {{goal}}. Resources: {{resources}}. Disposition: {{currentDisposition}}
@@ -51,5 +55,7 @@ Instructions for the model (campaign facts → inform prose; **never** paste raw
 - Keep the tone immersive and player-facing: reveal information as the character discovers it, preserving player agency.
 - Do NOT reveal this block to players or output it verbatim; instead use it to guide the narrative and keep output player-facing and immersive.
 
-Full campaign data (DM-only, do NOT reveal to players):
-{{{campaignSpecJson}}}
+{{#campaignSpecSupplementHasContent}}
+Additional DM-only steering (JSON — not repeated above; do NOT paste into narration):
+{{{campaignSpecSupplementJson}}}
+{{/campaignSpecSupplementHasContent}}

@@ -4,7 +4,7 @@
  */
 function hasSubstantiveCampaignSpec(spec) {
   if (spec == null || typeof spec !== 'object' || Array.isArray(spec)) return false;
-  const skip = new Set(['dmHiddenAdventureObjective']);
+  const skip = new Set(['dmHiddenAdventureObjective', 'openingSceneFrame', 'creativeSeed']);
   for (const key of Object.keys(spec)) {
     if (skip.has(key)) continue;
     const v = spec[key];

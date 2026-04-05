@@ -9,8 +9,119 @@
  */
 
 const GameState = require('../models/GameState');
-const { canonicalMemberIdStrings } = require('./partyLobbyState');
+const {
+  canonicalMemberIdStrings,
+  adventureHasBegun,
+  getParty,
+  mergeParty,
+  memberHasValidSheetForUserId,
+} = require('./partyLobbyState');
 const { notifyGameStateUpdated } = require('./gameStateSseHub');
+
+function partyRawObject(gameSetup) {
+  const gs = gameSetup && typeof gameSetup === 'object' ? gameSetup : {};
+  const p = gs.party;
+  return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+}
+
+function userIdsWhoChattedInConversation(conversation) {
+  const s = new Set();
+  if (!Array.isArray(conversation)) return s;
+  for (const m of conversation) {
+    if (m && m.role === 'user' && m.userId != null && String(m.userId).trim()) {
+      s.add(String(m.userId).trim());
+    }
+  }
+  return s;
+}
+
+/**
+ * Reconcile narrative introduction queues after restart (or any time DB was out of sync).
+ * - If `party.narrativeIntroducedUserIds` was never stored: one-time migration using chat + owner heuristics.
+ * - Otherwise: any member with a valid sheet who is neither introduced nor pending is re-queued on pending.
+ * @returns {null | { narrativeIntroducedUserIds: string[], pendingNarrativeIntroductionUserIds: string[] }}
+ */
+function computeNarrativeIntroRecovery(doc) {
+  if (!doc || !adventureHasBegun(doc)) return null;
+  const ids = canonicalMemberIdStrings(doc);
+  if (ids.length < 2) return null;
+
+  const withSheet = ids.filter((uid) => memberHasValidSheetForUserId(doc, uid));
+  if (!withSheet.length) return null;
+
+  const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
+  const rawParty = partyRawObject(gs);
+  const hadIntroField = Object.prototype.hasOwnProperty.call(rawParty, 'narrativeIntroducedUserIds');
+
+  const chatted = userIdsWhoChattedInConversation(doc.conversation);
+  const ownerStr = doc.ownerUserId != null ? String(doc.ownerUserId) : '';
+
+  const party = getParty(gs);
+  let introducedSet = new Set((party.narrativeIntroducedUserIds || []).map(String));
+  const pendSet = new Set((party.pendingNarrativeIntroductionUserIds || []).map(String));
+
+  if (!hadIntroField) {
+    introducedSet = new Set();
+    for (const uid of withSheet) {
+      if (chatted.has(uid) || uid === ownerStr) introducedSet.add(uid);
+    }
+    for (const uid of withSheet) {
+      if (!introducedSet.has(uid)) pendSet.add(uid);
+    }
+  } else {
+    for (const uid of withSheet) {
+      if (!introducedSet.has(uid) && !pendSet.has(uid)) pendSet.add(uid);
+    }
+  }
+
+  const nextIntroduced = [...introducedSet].filter(Boolean).sort();
+  const nextPending = [...pendSet].filter(Boolean).sort();
+  const curIntroduced = (party.narrativeIntroducedUserIds || []).map(String).sort().join('\0');
+  const curPending = (party.pendingNarrativeIntroductionUserIds || []).map(String).sort().join('\0');
+  if (curIntroduced === nextIntroduced.join('\0') && curPending === nextPending.join('\0')) return null;
+
+  return {
+    narrativeIntroducedUserIds: nextIntroduced,
+    pendingNarrativeIntroductionUserIds: nextPending,
+  };
+}
+
+async function requeueUnintroducedNarrativePlayersOnStartup() {
+  if (String(process.env.DM_STARTUP_REQUEUE_NARRATIVE_INTROS || 'true').toLowerCase() === 'false') {
+    console.log(
+      'recoverPendingGameStateOnStartup: narrative intro requeue skipped (DM_STARTUP_REQUEUE_NARRATIVE_INTROS=false)'
+    );
+    return;
+  }
+
+  const docs = await GameState.find({})
+    .select('gameId gameSetup ownerUserId memberUserIds campaignSpec conversation')
+    .lean();
+
+  let updated = 0;
+  for (const doc of docs) {
+    const patch = computeNarrativeIntroRecovery(doc);
+    if (!patch) continue;
+    const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
+    const nextSetup = mergeParty(gs, patch);
+    try {
+      await GameState.updateOne({ gameId: doc.gameId }, { $set: { gameSetup: nextSetup } });
+      updated += 1;
+      try {
+        notifyGameStateUpdated(doc.gameId);
+      } catch (e) {
+        /* ignore */
+      }
+    } catch (e) {
+      console.warn(`recoverPendingGameStateOnStartup: narrative intro patch failed for ${doc.gameId}:`, e);
+    }
+  }
+  if (updated > 0) {
+    console.log(
+      `recoverPendingGameStateOnStartup: narrative introduction queue reconciled for ${updated} game(s) (restart recovery)`
+    );
+  }
+}
 
 function requiredPartyMemberIdStringsFromDoc(doc) {
   return [...new Set(canonicalMemberIdStrings(doc).map((x) => String(x)))].filter(Boolean).sort();
@@ -203,6 +314,8 @@ async function recoverPendingGameStateOnStartup() {
 
   await clearStaleLlmInFlightFlags();
 
+  await requeueUnintroducedNarrativePlayersOnStartup();
+
   if (String(process.env.DM_STARTUP_RESUME_PARTY_DM || 'true').toLowerCase() === 'false') {
     console.log('recoverPendingGameStateOnStartup: party DM resume skipped (DM_STARTUP_RESUME_PARTY_DM=false)');
     return;
@@ -211,4 +324,4 @@ async function recoverPendingGameStateOnStartup() {
   await resumeStuckPartyDmRounds();
 }
 
-module.exports = { recoverPendingGameStateOnStartup };
+module.exports = { recoverPendingGameStateOnStartup, computeNarrativeIntroRecovery };

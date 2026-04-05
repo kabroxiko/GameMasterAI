@@ -4,6 +4,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const mongoose = require('mongoose');
+const { validateGeneratedPlayerCharacter } = require('../validatePlayerCharacter');
 const {
   defaultParty,
   getParty,
@@ -19,6 +20,7 @@ test('defaultParty has lobby phase', () => {
   const p = defaultParty();
   assert.strictEqual(p.phase, 'lobby');
   assert.ok(Array.isArray(p.readyUserIds));
+  assert.ok(Array.isArray(p.narrativeIntroducedUserIds));
 });
 
 test('mergeParty preserves language and updates party keys', () => {
@@ -74,4 +76,27 @@ test('memberHasValidSheetForUserId false when sheet missing or invalid', () => {
   };
   assert.strictEqual(memberHasValidSheetForUserId(doc, idStr), false);
   assert.strictEqual(memberHasValidSheetForUserId(doc, ''), false);
+});
+
+test('memberHasValidSheetForUserId applies ensurePlayerCharacterSheetDefaults before validate', () => {
+  const uid = new mongoose.Types.ObjectId();
+  const idStr = String(uid);
+  const rawNoCoinage = {
+    name: 'Persisted shape',
+    max_hp: 10,
+    current_hp: 10,
+    ac: 10,
+    armor: [],
+    equipment: ['Travel clothes and boots (no armor)'],
+    tools: [],
+    weapons: [{ name: 'Club', attack_bonus: 2, damage: '1d4 bludgeoning' }],
+    languages: ['Common'],
+  };
+  assert.strictEqual(validateGeneratedPlayerCharacter(rawNoCoinage).ok, false);
+  const doc = {
+    ownerUserId: uid,
+    memberUserIds: [],
+    gameSetup: { language: 'English', playerCharacters: { [idStr]: rawNoCoinage } },
+  };
+  assert.strictEqual(memberHasValidSheetForUserId(doc, idStr), true);
 });
