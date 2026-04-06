@@ -5,8 +5,14 @@ You are choosing **one** primary **physical and social situation** for the **ver
 **Campaign context (JSON — for you only; do not paste into player-facing text):**
 {{campaignContextJson}}
 
-Return **ONLY** valid JSON (no markdown fence, no commentary). Shape:
-{"openingSceneFrame":{"id":"short_snake_slug","directive":"..."}}
+Return **ONLY** valid YAML (no markdown fence, no commentary). Shape:
+
+openingSceneFrame:
+  id: short_snake_slug
+  directive: |
+    2–5 sentences of DM-only briefing in English...
+
+**Syntax:** Keep `directive` as a quoted string or `|` block so delimiters are never ambiguous.
 
 - **id**: short ASCII slug (letters, digits, underscores), max 48 chars — stable label for logs.
 - **directive**: **English**, 2–5 sentences, **DM-only**. It **commands** the first-scene model where beat one happens: name the **kind** of venue (interior dock office, trail ford, temple steps, market hall, workshop, crisis in a street, etc.), how PCs are situated, and what **concrete** friction or news creates a playable tilt. The directive **must** specify **at least one non-interrogation story fact** the opening prose must show — e.g. a **named or roled** NPC **doing** something specific (not “demands to know who you are”), a **visible object/document/seal** in play, an **alarm or second voice**, a **structural failure**, **impending deadline**, or **urgent news** tied to a faction or location from the JSON. **Invalid as the sole tilt:** “a hooded stranger asks their purpose” or any beat that reduces to **identity + business quiz** without a louder incident. **Reference** specific **key location names** or **faction / NPC roles** from the JSON when it fits — invent nothing that contradicts them. This text will be injected as a **mandatory** system instruction for the opening narration; write it as imperative briefing to the DM model, not in-world prose.

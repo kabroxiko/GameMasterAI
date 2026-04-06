@@ -18,8 +18,12 @@ const {
   allMembersReady,
   memberHasValidSheetForUserId,
   isLobbyParty,
+  normalizeUserIdString,
+  normalizeReadyUserIdsArray,
 } = require('../services/partyLobbyState');
 const { appendPlayerUserMessageWithPartyRound } = require('../gameStatePersist');
+const { draftPartyExpiresAtFromNow, draftPartyTtlMs } = require('../services/draftPartyTtl');
+const { hasSubstantiveCampaignSpec } = require('../campaignSpecReady');
 
 function gameStateDocForClient(doc) {
   if (!doc) return doc;
@@ -39,6 +43,42 @@ function gameStateDocForClient(doc) {
     delete o.gameSetup.generatedCharacter;
   }
   return o;
+}
+
+/** Lightweight row for GET /mine (load-game list); avoids shipping full conversations per game. */
+function gameStateSummaryForMineList(o, viewerUserIdStr) {
+  if (!o || typeof o !== 'object') return null;
+  const gameId = o.gameId != null ? String(o.gameId) : '';
+  const spec = o.campaignSpec && typeof o.campaignSpec === 'object' && !Array.isArray(o.campaignSpec) ? o.campaignSpec : {};
+  const title = typeof spec.title === 'string' && spec.title.trim() ? spec.title.trim() : '';
+  const gs = o.gameSetup && typeof o.gameSetup === 'object' ? o.gameSetup : {};
+  const party = getParty(gs);
+  const ownerStr = effectiveGameOwnerIdStr(o);
+  const members = Array.isArray(o.memberUserIds) ? o.memberUserIds : [];
+  const memberCount = members.length;
+  const msgCount =
+    typeof o.userAndAssistantMessageCount === 'number' && !Number.isNaN(o.userAndAssistantMessageCount)
+      ? o.userAndAssistantMessageCount
+      : 0;
+  let createdAt = null;
+  try {
+    if (o._id != null && mongoose.Types.ObjectId.isValid(o._id)) {
+      createdAt = new mongoose.Types.ObjectId(o._id).getTimestamp().toISOString();
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return {
+    gameId,
+    campaignTitle: title,
+    partyPhase: party.phase || 'lobby',
+    language: gs.language && String(gs.language).trim() ? String(gs.language).trim() : 'English',
+    memberCount,
+    messageCount: msgCount,
+    viewerIsOwner: ownerStr === String(viewerUserIdStr),
+    hasCampaign: hasSubstantiveCampaignSpec(spec),
+    createdAt,
+  };
 }
 
 // Persistence is server-driven: POST /api/game-session/bootstrap-session (setup shell),
@@ -126,8 +166,13 @@ router.get('/load/:gameId', requireAuth, async (req, res) => {
       if (isLobbyParty(lean0)) {
         const p0 = getParty(lean0.gameSetup);
         const curR = (p0.readyUserIds || []).map(String);
-        const pruned = curR.filter((id) => memberHasValidSheetForUserId(lean0, id));
-        if (pruned.length !== curR.length) {
+        const pruned = normalizeReadyUserIdsArray(
+          curR.filter((id) => memberHasValidSheetForUserId(lean0, id))
+        );
+        const normalizedCur = normalizeReadyUserIdsArray(curR);
+        const sameReady =
+          pruned.length === normalizedCur.length && pruned.every((id) => normalizedCur.includes(id));
+        if (!sameReady) {
           const healed = mergeParty(lean0.gameSetup, { readyUserIds: pruned });
           await GameState.updateOne({ gameId }, { $set: { gameSetup: healed } });
           try {
@@ -243,7 +288,7 @@ router.post('/create-party', requireAuth, async (req, res) => {
     }
     const gameId = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
     const gameSetup = mergeParty({ language }, defaultParty());
-    await GameState.create({
+    const createPayload = {
       gameId,
       ownerUserId: uidOid,
       memberUserIds: [uidOid],
@@ -253,7 +298,12 @@ router.post('/create-party', requireAuth, async (req, res) => {
       summary: '',
       totalTokenCount: 0,
       userAndAssistantMessageCount: 0,
-    });
+    };
+    if (draftPartyTtlMs() > 0) {
+      const at = draftPartyExpiresAtFromNow();
+      if (at) createPayload.draftPartyExpiresAt = at;
+    }
+    await GameState.create(createPayload);
     notifyGameStateUpdated(gameId);
     const created = await GameState.findOne({ gameId });
     res.status(201).json(gameStateDocForClient(created));
@@ -275,7 +325,7 @@ router.post('/party-ready', requireAuth, async (req, res) => {
       return sendAccessError(res, err);
     }
     const ready = req.body && (req.body.ready === true || req.body.ready === 'true');
-    const uid = String(req.userId);
+    const uid = normalizeUserIdString(req.userId);
     const doc = await GameState.findOne({ gameId });
     if (!doc) {
       return res.status(404).json({ error: 'Game not found', code: 'GAME_NOT_FOUND' });
@@ -290,7 +340,7 @@ router.post('/party-ready', requireAuth, async (req, res) => {
       });
     }
     const party = getParty(doc.gameSetup);
-    let readyUserIds = [...(party.readyUserIds || [])].map(String);
+    let readyUserIds = normalizeReadyUserIdsArray(party.readyUserIds || []);
     if (ready) {
       if (!readyUserIds.includes(uid)) readyUserIds.push(uid);
     } else {
@@ -360,12 +410,41 @@ router.get('/mine', requireAuth, async (req, res) => {
       $or: [{ ownerUserId: uid }, { memberUserIds: uid }],
     })
       .sort({ _id: -1 })
-      .limit(200);
+      .limit(200)
+      .lean();
     const list = Array.isArray(gameStates) ? gameStates : [];
-    res.json(list.map((g) => gameStateDocForClient(g)));
+    res.json(list.map((g) => gameStateSummaryForMineList(g, req.userId)).filter(Boolean));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to load your games' });
+  }
+});
+
+/** Host-only: permanently remove a game the current user owns. */
+router.delete('/mine/:gameId', requireAuth, async (req, res) => {
+  const gameId = req.params.gameId != null ? String(req.params.gameId).trim() : '';
+  if (!gameId) {
+    return res.status(400).json({ error: 'gameId required', code: 'GAME_ID_REQUIRED' });
+  }
+  try {
+    const doc = await GameState.findOne({ gameId }).select('ownerUserId gameId').lean();
+    if (!doc) {
+      return res.status(404).json({ error: 'Game not found', code: 'GAME_NOT_FOUND' });
+    }
+    const ownerStr = effectiveGameOwnerIdStr(doc);
+    if (!ownerStr || ownerStr !== String(req.userId)) {
+      return res.status(403).json({ error: 'Only the host can delete this game', code: 'NOT_GAME_OWNER' });
+    }
+    await GameState.deleteOne({ gameId });
+    try {
+      notifyGameStateUpdated(gameId);
+    } catch (e) {
+      /* ignore */
+    }
+    return res.json({ ok: true, deleted: true, gameId });
+  } catch (err) {
+    console.error('delete mine game failed:', err);
+    return res.status(500).json({ error: 'Failed to delete game' });
   }
 });
 

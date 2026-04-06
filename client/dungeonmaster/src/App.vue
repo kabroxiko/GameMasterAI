@@ -80,7 +80,7 @@
           </button>
         </div>
       </header>
-      <main :class="isAuthenticated ? '' : 'public-app-main'" style="width:100%;max-width:980px;">
+      <main :class="isAuthenticated ? '' : 'public-app-main'" class="app-main-column">
         <router-view></router-view>
       </main>
     </div>
@@ -158,8 +158,12 @@ export default {
         this.$nextTick(() => this.resetAndInitGoogleSignIn());
       }
     },
+    '$route.fullPath'() {
+      this.applyLayoutDebug();
+    },
   },
   mounted() {
+    this.applyLayoutDebug();
     this.$nextTick(() => {
       whenGsiReady(() => {
         if (!this.isAuthenticated) this.initGoogleSignIn();
@@ -170,6 +174,24 @@ export default {
     });
   },
   methods: {
+    /** Dashed outlines on layout regions: ?layoutDebug=1 or localStorage dm_layout_debug=1 */
+    applyLayoutDebug() {
+      if (typeof document === 'undefined') return;
+      try {
+        const raw = this.$route && this.$route.query && this.$route.query.layoutDebug;
+        const qs = raw != null ? String(raw).trim().toLowerCase() : '';
+        const fromQuery = qs === '1' || qs === 'true' || qs === 'yes';
+        let fromLs = false;
+        try {
+          fromLs = typeof localStorage !== 'undefined' && localStorage.getItem('dm_layout_debug') === '1';
+        } catch (e) {
+          /* ignore */
+        }
+        document.body.classList.toggle('gm-layout-debug', fromQuery || fromLs);
+      } catch (e) {
+        /* ignore */
+      }
+    },
     refreshChrome() {
       try {
         this.$forceUpdate();

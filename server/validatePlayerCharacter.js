@@ -823,6 +823,10 @@ function ensurePlayerCharacterSheetDefaults(pc, opts) {
   if (!pc || typeof pc !== 'object') return pc;
   const language = opts && opts.language;
   const out = JSON.parse(JSON.stringify(pc));
+  if (!String(out.name || '').trim() && out.identity && typeof out.identity === 'object' && out.identity.name != null) {
+    const idName = String(out.identity.name || '').trim();
+    if (idName) out.name = idName;
+  }
   out.armor = asArmorArray(out.armor);
   out.equipment = asStringArray(out.equipment);
   out.tools = asStringArray(out.tools);

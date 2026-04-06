@@ -71,12 +71,13 @@ function sheetLooksValid(sheet, language) {
 
 /** Resolve a member's sheet when the map key might not match strict bracket lookup (Mixed / driver quirks). */
 function resolvePlayerCharacterSheet(pcMap, userIdStr) {
-  const uid = userIdStr != null ? String(userIdStr) : '';
+  const uid = userIdStr != null ? String(userIdStr).trim() : '';
   if (!uid || !pcMap || typeof pcMap !== 'object' || Array.isArray(pcMap)) return null;
+  const lower = uid.toLowerCase();
   const direct = pcMap[uid];
   if (direct && typeof direct === 'object') return direct;
   for (const k of Object.keys(pcMap)) {
-    if (String(k) === uid && pcMap[k] && typeof pcMap[k] === 'object') return pcMap[k];
+    if (String(k).trim().toLowerCase() === lower && pcMap[k] && typeof pcMap[k] === 'object') return pcMap[k];
   }
   return null;
 }
@@ -84,6 +85,25 @@ function resolvePlayerCharacterSheet(pcMap, userIdStr) {
 function gameSetupLanguage(doc) {
   const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
   return gs.language && String(gs.language).trim() !== '' ? String(gs.language).trim() : 'English';
+}
+
+/** Normalize Mongo user id strings for ready lists and comparisons (hex ObjectIds are case-insensitive). */
+function normalizeUserIdString(raw) {
+  if (raw == null) return '';
+  return String(raw).trim().toLowerCase();
+}
+
+/** Dedupe + lowercase readyUserIds for stable storage and Set comparisons. */
+function normalizeReadyUserIdsArray(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const x of arr || []) {
+    const s = normalizeUserIdString(x);
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
 }
 
 function allMembersHaveValidSheets(doc) {
@@ -99,7 +119,7 @@ function allMembersHaveValidSheets(doc) {
 
 /** True when this user's row in gameSetup.playerCharacters passes the same validation as lobby start. */
 function memberHasValidSheetForUserId(doc, userIdStr) {
-  const uid = userIdStr != null ? String(userIdStr) : '';
+  const uid = normalizeUserIdString(userIdStr);
   if (!uid) return false;
   const gs = doc.gameSetup && typeof doc.gameSetup === 'object' ? doc.gameSetup : {};
   const pcMap =
@@ -111,8 +131,10 @@ function memberHasValidSheetForUserId(doc, userIdStr) {
 }
 
 function allMembersReady(party, doc) {
-  const ids = new Set(canonicalMemberIdStrings(doc));
-  const ready = new Set((party.readyUserIds || []).map(String));
+  const ids = new Set(canonicalMemberIdStrings(doc).map((x) => normalizeUserIdString(x)).filter(Boolean));
+  const ready = new Set(
+    (party.readyUserIds || []).map((x) => normalizeUserIdString(x)).filter(Boolean)
+  );
   if (ids.size === 0) return false;
   for (const id of ids) {
     if (!ready.has(id)) return false;
@@ -144,4 +166,6 @@ module.exports = {
   isLobbyParty,
   adventureHasBegun,
   sheetLooksValid,
+  normalizeUserIdString,
+  normalizeReadyUserIdsArray,
 };

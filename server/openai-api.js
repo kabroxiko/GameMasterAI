@@ -160,12 +160,31 @@ function coerceAssistantOutputToString(raw) {
  * options.response_format (e.g. { type: 'json_object' }) is forwarded to OpenAI-compatible
  * /v1/chat/completions when set.
  *
+ * options.failureMessageRef — optional `{ message: string }`; when set, errors are written only
+ * there (not the module global), so concurrent requests do not clobber each other's diagnostics.
+ *
  * Supports two backends:
  *  - LM Studio (local) when USE_LM_STUDIO=true
  *  - OpenAI REST API otherwise
  */
 async function generateResponse(input = {}, options = {}) {
-  lastGenerateFailureMessage = '';
+  const failureRef =
+    options.failureMessageRef && typeof options.failureMessageRef === 'object'
+      ? options.failureMessageRef
+      : null;
+  const setFailure = (msg) => {
+    if (failureRef) failureRef.message = msg;
+    else lastGenerateFailureMessage = msg;
+  };
+  const clearFailure = () => {
+    if (failureRef) failureRef.message = '';
+    else lastGenerateFailureMessage = '';
+  };
+  const okReturn = (content) => {
+    clearFailure();
+    return content;
+  };
+  clearFailure();
   const model = options.model || process.env.DM_OPENAI_MODEL || DEFAULT_MODEL;
   const messages = Array.isArray(input.messages)
     ? input.messages
@@ -221,12 +240,12 @@ async function generateResponse(input = {}, options = {}) {
       const raw =
         data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? null;
       const content = normalizeAssistantContent(raw);
-      if (content) return content;
+      if (content) return okReturn(content);
       const coercedRaw = coerceAssistantOutputToString(raw);
-      if (coercedRaw) return coercedRaw;
+      if (coercedRaw) return okReturn(coercedRaw);
       // fallthrough if unexpected shape
     } catch (err) {
-      lastGenerateFailureMessage = summarizeAxiosError(err);
+      setFailure(summarizeAxiosError(err));
       console.error('LM Studio /v1/chat/completions failed:', err?.response?.data ?? err.message ?? err);
       await persistDiagnostic({ llmCallError: String(err?.response?.data ?? err.message ?? err).slice(0, 200000), llmCallFallbackAt: new Date().toISOString() });
     }
@@ -253,15 +272,17 @@ async function generateResponse(input = {}, options = {}) {
         (data?.response && data.response?.generated_text) ||
         null;
       const coerced = coerceAssistantOutputToString(result);
-      if (coerced) return coerced;
+      if (coerced) return okReturn(coerced);
       const keys = data && typeof data === 'object' ? Object.keys(data).join(',') : typeof data;
       console.warn('LM Studio /api/v1/chat: no text in expected fields; response keys:', keys);
-      lastGenerateFailureMessage =
-        lastGenerateFailureMessage ||
-        `LM Studio responded but no model text was found (check loaded model and /api/v1/chat vs /v1/chat/completions). Keys: ${keys}`;
+      const prevMsg = failureRef ? failureRef.message : lastGenerateFailureMessage;
+      setFailure(
+        prevMsg ||
+          `LM Studio responded but no model text was found (check loaded model and /api/v1/chat vs /v1/chat/completions). Keys: ${keys}`
+      );
       return null;
     } catch (err) {
-      lastGenerateFailureMessage = summarizeAxiosError(err);
+      setFailure(summarizeAxiosError(err));
       console.error('LM Studio /api/v1/chat failed:', err?.response?.data ?? err.message ?? err);
       await persistDiagnostic({ llmCallError: String(err?.response?.data ?? err.message ?? err).slice(0, 200000), llmCallFallbackAt: new Date().toISOString() });
       return null;
@@ -292,11 +313,11 @@ async function generateResponse(input = {}, options = {}) {
 
   try {
     const out = await callOpenAI(model);
-    if (out) return out;
-    lastGenerateFailureMessage = 'OpenAI returned no assistant message (empty choices).';
+    if (out) return okReturn(out);
+    setFailure('OpenAI returned no assistant message (empty choices).');
     return null;
   } catch (err) {
-    lastGenerateFailureMessage = summarizeAxiosError(err);
+    setFailure(summarizeAxiosError(err));
     console.error('Error generating text (primary):', err?.response?.data ?? err.message ?? err);
     await persistDiagnostic({ llmCallError: String(err?.response?.data ?? err.message ?? err).slice(0, 200000), llmCallStartedAt: new Date().toISOString() });
     const code = err?.response?.data?.error?.code || '';
@@ -313,9 +334,9 @@ async function generateResponse(input = {}, options = {}) {
         } else {
           await persistDiagnostic({ llmFallbackSucceededAt: null });
         }
-        return fallbackResp;
+        return fallbackResp ? okReturn(fallbackResp) : null;
       } catch (e2) {
-        lastGenerateFailureMessage = summarizeAxiosError(e2);
+        setFailure(summarizeAxiosError(e2));
         console.error('Fallback to gpt-3.5-turbo failed:', e2?.response?.data ?? e2.message ?? e2);
         await persistDiagnostic({ llmFallbackError: String(e2?.response?.data ?? e2.message ?? e2).slice(0, 200000) });
       }

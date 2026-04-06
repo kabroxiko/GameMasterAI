@@ -11,12 +11,13 @@ export function resolveApiBaseURL() {
 }
 
 /**
- * WebSocket URL for game-state push (same `access_token` query pattern as SSE).
+ * EventSource URL for game-state push (SSE GET /api/game-state/events/:gameId).
+ * Uses `access_token` query — EventSource cannot send Authorization in all browsers.
  * @param {string} gameId
  * @param {string} accessToken
  * @returns {string}
  */
-export function resolveGameStateWebSocketUrl(gameId, accessToken) {
+export function resolveGameStateEventsUrl(gameId, accessToken) {
     const gid = gameId != null ? String(gameId).trim() : '';
     const tok = accessToken != null ? String(accessToken).trim() : '';
     if (!gid || !tok) return '';
@@ -24,8 +25,7 @@ export function resolveGameStateWebSocketUrl(gameId, accessToken) {
     if (!base) return '';
     try {
         const u = new URL(base);
-        const wsScheme = u.protocol === 'https:' ? 'wss:' : 'ws:';
-        const full = new URL(`/api/game-state/ws/${encodeURIComponent(gid)}`, `${wsScheme}//${u.host}`);
+        const full = new URL(`/api/game-state/events/${encodeURIComponent(gid)}`, u.origin);
         full.searchParams.set('access_token', tok);
         return full.toString();
     } catch (e) {

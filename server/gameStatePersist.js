@@ -10,6 +10,7 @@ const { mergePlayerCharacters, characterDisplayNameForUser } = require('./player
 const { hasSubstantiveCampaignSpec } = require('./campaignSpecReady');
 const { validateDistinctEntityNames } = require('./validateEntityNameUniqueness');
 const { mergeParty, canonicalMemberIdStrings, getParty } = require('./services/partyLobbyState');
+const { draftPartyExpiresAtFromNow, draftPartyTtlMs } = require('./services/draftPartyTtl');
 
 function normalizeConversationUserDisplayNames(conversation, gameSetup, fallbackUserId) {
   if (!Array.isArray(conversation)) return conversation;
@@ -153,13 +154,17 @@ async function persistGameStateFromBody(body, options = {}) {
     throw err;
   }
 
-  const setOnInsert =
-    !existingFull && uidOid
-      ? {
-          ownerUserId: uidOid,
-          memberUserIds: [uidOid],
-        }
-      : {};
+  let setOnInsert = {};
+  if (!existingFull && uidOid) {
+    setOnInsert = {
+      ownerUserId: uidOid,
+      memberUserIds: [uidOid],
+    };
+    if (draftPartyTtlMs() > 0 && !hasSubstantiveCampaignSpec(nextCampaignSpec)) {
+      const at = draftPartyExpiresAtFromNow();
+      if (at) setOnInsert.draftPartyExpiresAt = at;
+    }
+  }
 
   const mongoUpdate = { $set: update };
   if (Object.keys(setOnInsert).length) {

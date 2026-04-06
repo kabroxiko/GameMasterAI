@@ -21,11 +21,13 @@ function normalizeNameKey(s) {
   }
 }
 
-function listPlayerCharacterNameEntries(gameSetup) {
+function listPlayerCharacterNameEntries(gameSetup, excludeUserId) {
   const out = [];
   const map = gameSetup && gameSetup.playerCharacters;
   if (!map || typeof map !== 'object' || Array.isArray(map)) return out;
+  const skip = excludeUserId != null && String(excludeUserId).trim() !== '' ? String(excludeUserId) : null;
   for (const uid of Object.keys(map)) {
+    if (skip != null && String(uid) === skip) continue;
     const sheet = map[uid];
     const raw = characterDisplayNameFromSheet(sheet);
     if (!raw) continue;
@@ -89,6 +91,25 @@ function firstDuplicatePair(entries) {
 /**
  * @returns {{ ok: true } | { ok: false, error: string, code: string }}
  */
+/**
+ * Normalized display-name keys already used by other PCs (optionally excluding one user), major NPCs, and encounter labels.
+ * @param {{ gameSetup?: object, campaignSpec?: object, encounterState?: object, excludeUserId?: string }} opts
+ * @returns {Set<string>}
+ */
+function collectReservedEntityNameKeys({ gameSetup, campaignSpec, encounterState, excludeUserId } = {}) {
+  const keys = new Set();
+  for (const e of listPlayerCharacterNameEntries(gameSetup, excludeUserId)) {
+    if (e.key) keys.add(e.key);
+  }
+  for (const e of listMajorNpcNameEntries(campaignSpec)) {
+    if (e.key) keys.add(e.key);
+  }
+  for (const e of listEncounterParticipantNameEntries(encounterState)) {
+    if (e.key) keys.add(e.key);
+  }
+  return keys;
+}
+
 function validateDistinctEntityNames({ gameSetup, campaignSpec, encounterState } = {}) {
   const pcs = listPlayerCharacterNameEntries(gameSetup);
   const dupPc = firstDuplicatePair(pcs);
@@ -162,6 +183,7 @@ function dedupeMajorNpcNamesBySuffix(list) {
 
 module.exports = {
   normalizeNameKey,
+  collectReservedEntityNameKeys,
   validateDistinctEntityNames,
   dedupeMajorNpcNamesBySuffix,
 };

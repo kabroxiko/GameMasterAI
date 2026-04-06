@@ -1,7 +1,7 @@
 /**
- * Regression: generate-character used to run normalizeJsonLikeQuotes before JSON.parse.
- * Smart quotes inside string fields (common in Spanish prose) became ASCII " and broke the JSON.
- * @see server/routes/gameSession.js tryParsePlayerCharacterBlob
+ * Regression: prepareWireFormatText runs normalizeJsonLikeQuotes before YAML.parse.
+ * Smart quotes inside double-quoted YAML/JSON-like scalars must not be “fixed” in a way that breaks parsing.
+ * Character output is YAML-only; these tests document why blind delimiter replacement is dangerous.
  */
 const { test } = require('node:test');
 const assert = require('node:assert');

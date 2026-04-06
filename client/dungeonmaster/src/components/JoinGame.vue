@@ -10,7 +10,8 @@
 </template>
 
 <script>
-import { SESSION_CONSUME_INVITE, SESSION_SETUP_GAME_ID } from '@/setupSession.js';
+import axios from 'axios';
+import { SESSION_CHAT_TOAST, SESSION_SETUP_GAME_ID } from '@/setupSession.js';
 
 export default {
   name: 'JoinGame',
@@ -38,12 +39,49 @@ export default {
       this.error = this.$i18n.join_game_sign_in_first;
       return;
     }
+    this.status = this.$i18n.invite_joining_party;
+    this.error = null;
     try {
-      sessionStorage.setItem(SESSION_CONSUME_INVITE, token);
+      const { data } = await axios.post('/api/auth/join', { inviteToken: token });
+      const gameId = data && data.gameId ? String(data.gameId) : '';
+      if (!gameId) {
+        this.error = this.$i18n.join_game_failed;
+        return;
+      }
+      try {
+        sessionStorage.removeItem('dm_pending_invite');
+      } catch (e) {
+        /* ignore */
+      }
+      this.$store.commit('setGameId', gameId);
+      if (data && data.alreadyMember === true) {
+        try {
+          sessionStorage.setItem(
+            SESSION_CHAT_TOAST,
+            JSON.stringify({
+              message: this.$i18n.join_already_in_party,
+              variant: 'success',
+            })
+          );
+        } catch (e) {
+          /* ignore */
+        }
+      }
+      await this.$router.replace({ name: 'ChatRoomWithId', params: { id: gameId } });
     } catch (e) {
-      /* ignore */
+      const code = e.response && e.response.data && e.response.data.code;
+      this.error =
+        code === 'INVITE_INVALID'
+          ? this.$i18n.join_invite_invalid
+          : (e.response && e.response.data && e.response.data.error) || this.$i18n.join_game_failed;
+      try {
+        sessionStorage.removeItem('dm_pending_invite');
+      } catch (err) {
+        /* ignore */
+      }
+    } finally {
+      this.status = '';
     }
-    await this.$router.replace({ name: 'Setup' });
   },
 };
 </script>

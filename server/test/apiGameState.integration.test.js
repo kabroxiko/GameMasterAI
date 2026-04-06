@@ -88,6 +88,41 @@ test('GET /api/game-state/mine returns games for owner', async () => {
   assert.ok(res.body.some((g) => g && g.gameId === gameId));
 });
 
+test('GET /api/game-state/mine returns summary rows (not full game state)', async () => {
+  const res = await request(app).get('/api/game-state/mine').set('Authorization', `Bearer ${tokenA}`);
+  assert.strictEqual(res.status, 200);
+  const row = res.body.find((g) => g && g.gameId === gameId);
+  assert.ok(row);
+  assert.strictEqual(typeof row.viewerIsOwner, 'boolean');
+  assert.ok(['lobby', 'starting', 'playing'].includes(row.partyPhase));
+  assert.strictEqual(typeof row.memberCount, 'number');
+  assert.strictEqual(typeof row.messageCount, 'number');
+  assert.strictEqual(typeof row.hasCampaign, 'boolean');
+  assert.strictEqual(row.conversation, undefined);
+});
+
+test('DELETE /api/game-state/mine/:gameId removes game for owner only', async () => {
+  const created = await request(app)
+    .post('/api/game-state/create-party')
+    .set('Authorization', `Bearer ${tokenA}`)
+    .send({ language: 'English' });
+  assert.strictEqual(created.status, 201);
+  const gid = created.body && created.body.gameId;
+  assert.ok(gid);
+  const deny = await request(app)
+    .delete(`/api/game-state/mine/${encodeURIComponent(gid)}`)
+    .set('Authorization', `Bearer ${tokenB}`);
+  assert.strictEqual(deny.status, 403);
+  assert.strictEqual(deny.body && deny.body.code, 'NOT_GAME_OWNER');
+  const ok = await request(app)
+    .delete(`/api/game-state/mine/${encodeURIComponent(gid)}`)
+    .set('Authorization', `Bearer ${tokenA}`);
+  assert.strictEqual(ok.status, 200);
+  assert.strictEqual(ok.body && ok.body.ok, true);
+  const gone = await GameState.findOne({ gameId: gid }).lean();
+  assert.strictEqual(gone, null);
+});
+
 test('GET /api/game-state/mine returns empty list for user with no games', async () => {
   const res = await request(app).get('/api/game-state/mine').set('Authorization', `Bearer ${tokenB}`);
   assert.strictEqual(res.status, 200);
@@ -434,6 +469,9 @@ test('POST /api/game-state/create-party returns lobby gameSetup.party', async ()
   assert.strictEqual(res.status, 201);
   assert.ok(res.body && res.body.gameId);
   assert.strictEqual(res.body.gameSetup && res.body.gameSetup.party && res.body.gameSetup.party.phase, 'lobby');
+  const row = await GameState.findOne({ gameId: res.body.gameId }).select('draftPartyExpiresAt').lean();
+  assert.ok(row && row.draftPartyExpiresAt, 'new lobby party should have draftPartyExpiresAt for Mongo TTL');
+  assert.ok(row.draftPartyExpiresAt > new Date(), 'draftPartyExpiresAt should be in the future');
 });
 
 test('PATCH /api/game-state/party-premise rejects non-owner (member but not host)', async () => {
@@ -527,4 +565,100 @@ test('POST /api/game-session/start-party-adventure returns 400 when sheets incom
     .send({ gameId: gid });
   assert.strictEqual(start.status, 400);
   assert.strictEqual(start.body && start.body.code, 'PARTY_SHEETS_INCOMPLETE');
+});
+
+test('Mongo $set on gameSetup.playerCharacters per user preserves both rows (no lost update)', async () => {
+  const created = await request(app)
+    .post('/api/game-state/create-party')
+    .set('Authorization', `Bearer ${tokenA}`)
+    .send({ language: 'English' });
+  const gid = created.body && created.body.gameId;
+  assert.ok(gid);
+  const userBDoc = await User.findOne({ googleSub: 'integration-test-sub-b' }).lean();
+  assert.ok(userBDoc);
+  const userBIdStr = String(userBDoc._id);
+  await GameState.updateOne({ gameId: gid }, { $addToSet: { memberUserIds: userBDoc._id } });
+  await GameState.updateOne(
+    { gameId: gid },
+    { $set: { [`gameSetup.playerCharacters.${userAIdStr}`]: { name: 'ConcurrentA' } } }
+  );
+  await GameState.updateOne(
+    { gameId: gid },
+    { $set: { [`gameSetup.playerCharacters.${userBIdStr}`]: { name: 'ConcurrentB' } } }
+  );
+  const row = await GameState.findOne({ gameId: gid }).select('gameSetup').lean();
+  assert.ok(row && row.gameSetup && row.gameSetup.playerCharacters);
+  assert.strictEqual(row.gameSetup.playerCharacters[userAIdStr] && row.gameSetup.playerCharacters[userAIdStr].name, 'ConcurrentA');
+  assert.strictEqual(row.gameSetup.playerCharacters[userBIdStr] && row.gameSetup.playerCharacters[userBIdStr].name, 'ConcurrentB');
+});
+
+test('GET /api/game-state/load keeps both ready after host-first guest-last when host sheet key differs by hex case', async () => {
+  const created = await request(app)
+    .post('/api/game-state/create-party')
+    .set('Authorization', `Bearer ${tokenA}`)
+    .send({ language: 'English' });
+  const gid = created.body && created.body.gameId;
+  assert.ok(gid);
+  const userBDoc = await User.findOne({ googleSub: 'integration-test-sub-b' }).lean();
+  assert.ok(userBDoc);
+  const userBIdStr = String(userBDoc._id);
+  await GameState.updateOne({ gameId: gid }, { $addToSet: { memberUserIds: userBDoc._id } });
+
+  const { ensurePlayerCharacterSheetDefaults } = require('../validatePlayerCharacter');
+  const sheet = ensurePlayerCharacterSheetDefaults(
+    {
+      name: 'Lobby Test PC',
+      class: 'fighter',
+      level: 1,
+      ancestry: 'human',
+      background: 'Soldier',
+      alignment: 'neutral',
+      max_hp: 12,
+      current_hp: 12,
+      ac: 16,
+      abilities: { str: 16, dex: 14, con: 15, int: 8, wis: 10, cha: 10 },
+      skills: [],
+      proficiencies: { armor: ['light', 'medium', 'heavy', 'shields'], weapons: ['simple', 'martial'] },
+      languages: ['Common'],
+      equipment: ['common clothes', 'belt pouch'],
+      weapons: [{ name: 'Longsword', attack_bonus: 5, damage: '1d8+3 slashing' }],
+      armor: [],
+      tools: [],
+      spells: [],
+      features: [],
+    },
+    { language: 'English' }
+  );
+  const ownerKeyUpper = userAIdStr.toUpperCase();
+  await GameState.updateOne(
+    { gameId: gid },
+    {
+      $set: {
+        [`gameSetup.playerCharacters.${ownerKeyUpper}`]: sheet,
+        [`gameSetup.playerCharacters.${userBIdStr}`]: sheet,
+      },
+    }
+  );
+
+  const readyA = await request(app)
+    .post('/api/game-state/party-ready')
+    .set('Authorization', `Bearer ${tokenA}`)
+    .send({ gameId: gid, ready: true });
+  assert.strictEqual(readyA.status, 200);
+
+  const readyB = await request(app)
+    .post('/api/game-state/party-ready')
+    .set('Authorization', `Bearer ${tokenB}`)
+    .send({ gameId: gid, ready: true });
+  assert.strictEqual(readyB.status, 200);
+  assert.strictEqual(readyB.body.partyReadyMeta && readyB.body.partyReadyMeta.allMembersReady, true);
+
+  const loadHost = await request(app)
+    .get(`/api/game-state/load/${encodeURIComponent(gid)}`)
+    .set('Authorization', `Bearer ${tokenA}`);
+  assert.strictEqual(loadHost.status, 200);
+  const rawIds =
+    loadHost.body.gameSetup && loadHost.body.gameSetup.party && loadHost.body.gameSetup.party.readyUserIds;
+  const norm = (arr) => [...(arr || [])].map((x) => String(x).toLowerCase()).sort();
+  assert.deepStrictEqual(norm(rawIds), norm([userAIdStr, userBIdStr]));
 });

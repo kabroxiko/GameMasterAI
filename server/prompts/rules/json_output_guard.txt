@@ -1,8 +1,13 @@
-OUTPUT FORMAT RULE: For requests that must return machine-readable data, return ONLY the requested JSON object and NO additional text, markdown, explanation, or commentary. Do not restate instructions or paste example JSON from the prompt as your answer. Match the keys and shape the user message asks for (including DM envelope keys like "narration" when that is the task).
+OUTPUT FORMAT RULE: For requests that must return machine-readable data, return **one YAML document** only — no additional text, markdown explanation, or commentary. Do not restate instructions or paste the prompt’s example as your answer. Match the keys and shape the user message asks for.
 
-If the API or model stack sends a separate reasoning / thinking / chain-of-thought stream or message part, leave it empty: put the complete valid JSON only in the final assistant-visible content. Reasoning must not appear where the server parses the reply.
+Prefer YAML block scalars (`|`) for long prose so you avoid escaping issues inside strings.
 
-If something is incomplete, still return syntactically valid JSON with the required top-level keys: use shorter strings, fewer array entries, or empty arrays where appropriate—never a bare `{}` when the request defines specific keys (DM play envelope keys, campaign generator keys, etc.). Never emit truncated JSON or stop mid-string.
+YAML hygiene:
+- Quote strings that would be read as booleans or null in YAML (`"yes"`, `"no"`, `"on"`, `"off"`, `"null"`) when they are meant as plain text, not YAML booleans/null.
+- Use `|` (or `>-`) for multi-line narration or long single-line text that contains quotes or colons.
 
-IMPORTANT OVERRIDE: When returning machine-readable JSON, IGNORE any length-splitting conventions such as the token "[CONTINUE]". Do NOT append "[CONTINUE]" or split the JSON across multiple messages. If you are near max_tokens, shorten content inside the JSON so the object still closes with valid braces and quotes—do not output `{}` or half-finished JSON as a shortcut.
+If the API or model stack sends a separate reasoning / thinking / chain-of-thought stream or message part, leave it empty: put the complete valid YAML only in the final assistant-visible content. Reasoning must not appear where the server parses the reply.
 
+If something is incomplete, still return syntactically valid YAML with the required top-level keys: use shorter strings, fewer list entries, or empty lists where appropriate — never a bare empty map when the request defines specific keys. Do not stop mid-scalar without closing the block or quote.
+
+IMPORTANT OVERRIDE: IGNORE any length-splitting conventions such as the token "[CONTINUE]". Do NOT append "[CONTINUE]" or split the structured output across multiple messages. If you are near max_tokens, shorten content inside the fields so the YAML still closes correctly — do not output a half-finished document as a shortcut.

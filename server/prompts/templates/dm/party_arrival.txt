@@ -1,6 +1,6 @@
 DM-ONLY — NEW PLAYER(S) JOINED MID-SESSION (do not break the fourth wall):
 
-**Priority for this assistant reply:** At least one substantial paragraph of your JSON `narration` must **introduce each listed newcomer into the ongoing story** so their presence feels **motivated by the fiction**, not only by table logistics. This is not optional background: the table is waiting to see *why this person is here now* and how they connect to what is already at stake.
+**Priority for this assistant reply:** At least one substantial paragraph of your envelope `narration` must **introduce each listed newcomer into the ongoing story** so their presence feels **motivated by the fiction**, not only by table logistics. This is not optional background: the table is waiting to see *why this person is here now* and how they connect to what is already at stake.
 
 The following player character(s) were **not** in prior beats; **do not retcon** earlier events or dialogue.
 

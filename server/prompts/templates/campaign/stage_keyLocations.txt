@@ -2,11 +2,16 @@ Campaign stage: keyLocations
 
 Based on this campaignConcept: {{campaignConcept}}
 
-Return ONLY JSON (no surrounding text). Preferred shape:
-{"keyLocations":[{"name":"...","type":"...","significance":"..."}, ...]}
+Return **ONLY** YAML (no surrounding text). Preferred shape:
 
-A bare JSON array of those objects is also acceptable. Each item must have:
+keyLocations:
+  - name: "..."
+    type: "..."
+    significance: "..."
+
+Each item must have:
 - name (string) — **English** fantasy place name (evocative or invented toponym; not real mundane city names), even when **type** / **significance** follow the **session language policy** (system message); vary geography and metaphor across locations
 - type (string) — short type label (settlement, ruin, temple, wilderness, …)
-- significance (1-2 sentences)
+- significance (1-2 sentences; use `|` for multiline if needed)
 
+A bare YAML sequence of those mappings at the root is also acceptable.

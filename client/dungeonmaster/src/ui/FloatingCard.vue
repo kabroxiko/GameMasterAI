@@ -14,7 +14,7 @@
         <div class="char-sheet-hero">
           <h2 :id="titleId" class="ui-heading char-sheet-name">{{ character.name }}</h2>
           <p class="floating-sub char-sheet-lineage">
-            <span class="char-sheet-lineage-main">{{ displayRace }} · {{ displayClass }}</span>
+            <span class="char-sheet-lineage-main">{{ displayRace }}<template v-if="displaySubrace"> · {{ displaySubrace }}</template> · {{ displayClass }}</span>
             <template v-if="character.subclass">
               <span class="char-sheet-subclass"> · {{ character.subclass }}</span>
             </template>
@@ -365,6 +365,21 @@ export default {
     displayClass() {
       return this.localizeSheetField(this.character.class, (this.$i18n.classes || []));
     },
+    displaySubrace() {
+      const raw =
+        this.character.subrace != null && String(this.character.subrace).trim()
+          ? this.character.subrace
+          : this.character.subraceId;
+      if (raw == null || raw === '') return '';
+      const labels = (this.$i18n && this.$i18n.subrace_labels) || {};
+      const key = String(raw)
+        .trim()
+        .toLowerCase()
+        .replace(/-/g, '_')
+        .replace(/\s+/g, '_');
+      if (labels[key]) return labels[key];
+      return String(raw).trim();
+    },
     /** Normalized armor rows for display (strings or { name, ac_bonus, base_ac, ac } from server). */
     armorRows() {
       const a = this.character && this.character.armor;
@@ -583,7 +598,9 @@ export default {
       handler(newVal, oldVal) {
         if (!oldVal || !newVal) return;
         const sig = (c) =>
-          [c.name, c.class, c.level, c.subclass].map((x) => String(x == null ? '' : x)).join('\0');
+          [c.name, c.class, c.level, c.subclass, c.subrace, c.subraceId]
+            .map((x) => String(x == null ? '' : x))
+            .join('\0');
         if (sig(newVal) !== sig(oldVal)) {
           this.charSheetActiveTab = 0;
           this.spellLevelPageIndex = 0;

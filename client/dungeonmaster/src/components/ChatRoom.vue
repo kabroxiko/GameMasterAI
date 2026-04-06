@@ -5,15 +5,19 @@
         <p>Error: {{ errorMessage }}</p>
         <button @click="tryAgain">Try again</button>
     </div>
-    <div v-else-if="isPartyLobby" class="party-lobby chat-room">
-        <header class="chat-room__header">
-            <!-- No manual sync button in lobby; reload the page if needed. -->
-            <div class="campaign-heading-row">
-                <h2 class="campaign-heading">{{ $i18n.lobby_title }}</h2>
+    <!-- Do not add `chat-room` here: that class caps width at 640px and shrinks the whole lobby vs the banner. -->
+    <div v-else-if="isPartyLobby" class="party-lobby">
+        <header class="party-lobby__hero">
+            <div class="party-lobby__hero-top">
+                <div class="party-lobby__hero-text">
+                    <p class="party-lobby__eyebrow">{{ $i18n.lobby_eyebrow }}</p>
+                    <h2 class="party-lobby__title">{{ $i18n.lobby_title }}</h2>
+                    <p class="party-lobby__desc">{{ $i18n.lobby_desc }}</p>
+                </div>
                 <button
                     v-if="!partyLobbyActionsFrozen && canShareInviteLink"
                     type="button"
-                    class="app-banner__tool chat-room__invite-tool"
+                    class="party-lobby__invite app-banner__tool chat-room__invite-tool"
                     :disabled="inviteLoading"
                     :aria-busy="inviteLoading"
                     :title="$i18n.invite_players"
@@ -24,52 +28,123 @@
                     <FontAwesomeIcon :icon="faUserPlus" class="ui-icon ui-icon--toolbar" aria-hidden="true" />
                 </button>
             </div>
-            <p class="party-lobby__desc">{{ $i18n.lobby_desc }}</p>
         </header>
         <p v-if="lobbyError" class="party-lobby__err" role="alert">{{ lobbyError }}</p>
-        <p v-if="partyPhase === 'starting'" class="party-lobby__status" role="status">{{ $i18n.lobby_starting }}</p>
-        <ul class="party-lobby__list" aria-label="Lobby members">
-            <li v-if="lobbyMemberRows.length" class="party-lobby__item party-lobby__item--head" aria-hidden="true">
-                <span class="party-lobby__name" />
-                <span class="party-lobby__flags party-lobby__flags--head">
-                    <span class="party-lobby__flag-cell party-lobby__flag-label">{{ $i18n.lobby_col_sheet }}</span>
-                    <span class="party-lobby__flag-cell party-lobby__flag-label">{{ $i18n.lobby_col_table }}</span>
-                </span>
-            </li>
-            <li v-for="row in lobbyMemberRows" :key="row.id" class="party-lobby__item">
-                <div class="party-lobby__identity">
-                    <span class="party-lobby__name">{{ row.display }}</span>
-                    <span v-if="row.detailsLine" class="party-lobby__meta">{{ row.detailsLine }}</span>
-                </div>
-                <span class="party-lobby__flags">
-                    <span class="party-lobby__flag-cell" :class="row.hasSheet ? 'ok' : 'miss'">{{
-                        row.hasSheet ? $i18n.lobby_sheet_ok : $i18n.lobby_sheet_missing
-                    }}</span>
-                    <span class="party-lobby__flag-cell" :class="row.isReady ? 'ok' : 'miss'">{{
-                        row.isReady ? $i18n.lobby_ready_confirmed : $i18n.lobby_ready_waiting
-                    }}</span>
-                </span>
-            </li>
-        </ul>
-        <UIButton
-            v-if="showLobbyCharacterEditCta"
-            type="button"
-            class="party-lobby__open-setup chat-toolbar__secondary"
-            @click="openLobbyCharacterEditor"
-        >{{ $i18n.lobby_edit_character_cta }}</UIButton>
+        <details v-if="partyLobbyDebugEnabled" class="party-lobby__debug" open>
+            <summary class="party-lobby__debug-summary">Party lobby debug</summary>
+            <p class="party-lobby__debug-hint">
+                Toggle: URL <code>?partyLobbyDebug=1</code> or
+                <code>localStorage.setItem('dm_party_lobby_debug','1')</code> (reload). Console:
+                <code>[GameMasterAI party-lobby]</code>
+            </p>
+            <pre class="party-lobby__debug-pre" aria-live="polite">{{ partyLobbyDebugText }}</pre>
+        </details>
+        <section v-if="lobbyMemberRows.length" class="party-lobby__roster" aria-labelledby="party-lobby-roster-title">
+            <h3 id="party-lobby-roster-title" class="party-lobby__roster-title">{{ $i18n.lobby_roster_heading }}</h3>
+            <ul class="party-lobby__list">
+                <li v-for="row in lobbyMemberRows" :key="row.id" class="party-lobby__item">
+                    <span
+                        class="party-lobby__avatar"
+                        :class="{ 'party-lobby__avatar--two': row.initial.length > 1 }"
+                        aria-hidden="true"
+                    >{{ row.initial }}</span>
+                    <div class="party-lobby__identity">
+                        <span class="party-lobby__name">{{ row.display }}</span>
+                        <span v-if="row.detailsLine" class="party-lobby__meta">{{ row.detailsLine }}</span>
+                    </div>
+                    <div class="party-lobby__ready-cell">
+                        <template v-if="row.isYou && !row.isReady && !partyLobbyRosterOwnRowFrozen">
+                            <div class="party-lobby__ready-actions">
+                                <UIButton
+                                    v-if="showLobbyCharacterEditCta"
+                                    type="button"
+                                    class="party-lobby__roster-regenerate-btn"
+                                    :aria-label="$i18n.regenerate_character"
+                                    @click="openLobbyCharacterEditor"
+                                >
+                                    {{ $i18n.lobby_roster_regenerate_short }}
+                                </UIButton>
+                                <UIButton
+                                    v-if="row.hasSheet"
+                                    class="party-lobby__roster-ready-btn"
+                                    :disabled="lobbyRosterConfirmPosting"
+                                    :aria-busy="lobbyRosterConfirmPosting ? 'true' : 'false'"
+                                    :aria-label="$i18n.lobby_roster_ready_aria"
+                                    @click="confirmReadyFromRosterCell"
+                                >
+                                    <span v-if="lobbyRosterConfirmPosting" class="party-lobby__roster-ready-btn__busy">{{
+                                        $i18n.lobby_saving_ready_then_start
+                                    }}</span>
+                                    <span v-else class="party-lobby__roster-ready-btn__inner">
+                                        <FontAwesomeIcon
+                                            :icon="faCircleCheck"
+                                            class="party-lobby__badge-icon"
+                                            aria-hidden="true"
+                                        />
+                                        {{ $i18n.lobby_roster_ready_short }}
+                                    </span>
+                                </UIButton>
+                                <UIButton
+                                    v-else
+                                    class="party-lobby__roster-ready-btn party-lobby__roster-ready-btn--blocked"
+                                    :disabled="true"
+                                    :aria-label="$i18n.lobby_roster_need_character_aria"
+                                >
+                                    <span class="party-lobby__roster-ready-btn__inner">
+                                        <FontAwesomeIcon
+                                            :icon="faHourglassHalf"
+                                            class="party-lobby__badge-icon"
+                                            aria-hidden="true"
+                                        />
+                                        {{ $i18n.lobby_ready_waiting }}
+                                    </span>
+                                </UIButton>
+                            </div>
+                        </template>
+                        <span
+                            v-else
+                            class="party-lobby__badge party-lobby__badge--ready"
+                            :class="row.isReady ? 'party-lobby__badge--ok' : 'party-lobby__badge--wait'"
+                        >
+                            <FontAwesomeIcon
+                                :icon="row.isReady ? faCircleCheck : faHourglassHalf"
+                                class="party-lobby__badge-icon"
+                                aria-hidden="true"
+                            />
+                            <span>{{ row.isReady ? $i18n.lobby_ready_confirmed : $i18n.lobby_ready_waiting }}</span>
+                        </span>
+                    </div>
+                </li>
+            </ul>
+        </section>
+
         <section
             v-if="showLobbyCharacterSetupPanel"
             class="party-lobby__setup"
             :aria-label="$i18n.lobby_setup_section_aria"
         >
             <SetupForm
+                ref="lobbyInlineSetup"
                 lobby-inline
                 :lobby-interactions-locked="partyLobbyActionsFrozen"
                 @lobby-character-done="onLobbyInlineCharacterDone"
+                @lobby-inline-wizard-hold="onLobbyInlineWizardHold"
+                @lobby-inline-confirm-sheet="onLobbyInlineConfirmSheet"
             />
         </section>
         <p v-if="lastStartError" class="party-lobby__warn">{{ $i18n.lobby_last_error }}: {{ lastStartError }}</p>
-        <FloatingCard v-if="playerCharacter" :character="playerCharacter" :hp-snapshot="playerHitPoints" :defaultOpen="false" />
+        <!-- In-flow sheet (embedded): uses theme .floating-card--embedded width:100% — avoids fixed FAB 492px cap. -->
+        <section
+            v-if="showPartyLobbyEmbeddedCharacterSheet"
+            class="party-lobby__character-sheet"
+            :aria-label="$i18n.lobby_character_sheet_section_aria"
+        >
+            <FloatingCard
+                embedded
+                :character="playerCharacter"
+                :hp-snapshot="playerHitPoints"
+            />
+        </section>
     </div>
     <div v-else class="chat-room two-column">
         <header class="chat-room__header">
@@ -162,10 +237,12 @@ import FloatingCard from '@/ui/FloatingCard.vue';
 import UIButton from '@/ui/Button.vue';
 import SetupForm from '@/components/SetupForm.vue';
 import { absoluteInviteUrl } from '@/utils/inviteLink.js';
-import { resolveApiBaseURL, resolveGameStateWebSocketUrl } from '@/utils/apiBase.js';
+import { resolveApiBaseURL, resolveGameStateEventsUrl } from '@/utils/apiBase.js';
 import { fetchGameStateLoad } from '@/utils/fetchGameStateLoad.js';
 import { SESSION_CHAT_TOAST } from '@/setupSession.js';
 import { faUserPlus } from '@fortawesome/free-solid-svg-icons/faUserPlus';
+import { faCircleCheck } from '@fortawesome/free-solid-svg-icons/faCircleCheck';
+import { faHourglassHalf } from '@fortawesome/free-solid-svg-icons/faHourglassHalf';
 
 const md = new MarkdownIt({ html: false, linkify: true, typographer: true });
 // Force markdown renderer to emit paragraphs with zero margin to avoid CSS spacing issues
@@ -199,6 +276,8 @@ export default {
         data() {
             return {
                 faUserPlus,
+                faCircleCheck,
+                faHourglassHalf,
                 // summaryPrompt removed from client; server composes summary instruction
                 // Initial state for the component
                 newMessage: "", // Holds the current message being typed
@@ -240,16 +319,24 @@ export default {
                 memberUserIds: [],
                 /** From GET /game-state/load: Mongo user id string → trimmed nickname (lobby roster). */
                 memberNicknamesByUserId: {},
+                lobbyRosterConfirmPosting: false,
+                /** Synced from SetupForm on the inline confirm step — roster cannot rely on Vuex alone. */
+                lobbyInlineConfirmSheet: null,
                 lobbyCharacterEditorOpen: false,
+                /**
+                 * Inline SetupForm owns the UI (create / confirm / back-to-form). When false and the viewer has a
+                 * saved sheet, show sheet-only (refresh) without requiring sessionStorage or party.readyUserIds.
+                 */
+                lobbyInlineWizardHold: false,
                 lobbyError: '',
                 lobbyStartingPollTimer: null,
                 /** Multiplayer: this client submitted; DM runs only after every member acts. */
                 partyRoundWaitingOthers: false,
-                /** WebSocket push for game-state-updated; same gameId + OPEN/CONNECTING avoids reconnect churn. */
-                gameStateWebSocket: null,
-                gameStateWebSocketGameId: null,
-                gameStateWsReconnectTimer: null,
-                gameStateWsBackoffMs: 1000,
+                /** SSE (EventSource) for game-state-updated; same gameId + OPEN/CONNECTING avoids reconnect churn. */
+                gameStateEventSource: null,
+                gameStateEventSourceGameId: null,
+                gameStateEsReconnectTimer: null,
+                gameStateEsBackoffMs: 1000,
                 pushSyncTimer: null,
             };
         },
@@ -263,7 +350,8 @@ export default {
             // check if a gameId is provided in the route
             if (this.$route.params.id) {
                 // Same as syncFromServer: trust server sheet for this viewer after load (parity with refresh vs button).
-                await this.loadGameState(this.$route.params.id, { replaceLocalCharacter: true });
+                const loaded = await this.loadGameState(this.$route.params.id, { replaceLocalCharacter: true });
+                if (!loaded) return;
                 this.systemMessageContentDM = this.$store.state.systemMessageContentDM || '';
                 const inLobby =
                     this.$store.state.gameSetup &&
@@ -285,7 +373,9 @@ export default {
         computed: {
             myUserIdStr() {
                 const id = this.$store.state.userId;
-                return id != null ? String(id) : '';
+                if (id == null) return '';
+                const s = String(id).trim();
+                return s;
             },
             /** Mirrors GET /game-state/load `viewerIsGameOwner` so UI (e.g. invite) works before `ownerUserId` is hydrated. */
             isGameOwner() {
@@ -374,8 +464,10 @@ export default {
                     const sheet = this.pickPlayerCharacterFromStore(id);
                     const nameRaw = sheet && sheet.name != null && String(sheet.name).trim();
                     const label = nameRaw ? String(sheet.name).trim() : this.memberPrimaryLabel(id);
-                    const isYou = Boolean(uid && id === uid);
-                    const isHost = Boolean(owner && id === owner);
+                    const isYou = Boolean(uid && this.normalizeLobbyUserIdKey(uid) === this.normalizeLobbyUserIdKey(id));
+                    const isHost = Boolean(
+                        owner && this.normalizeLobbyUserIdKey(owner) === this.normalizeLobbyUserIdKey(id)
+                    );
                     let display = label;
                     if (isYou) display += ` (${this.$i18n.party_you})`;
                     if (isHost) display += ` — ${this.$i18n.party_host}`;
@@ -503,14 +595,41 @@ export default {
                 const p = this.$store.state.gameSetup && this.$store.state.gameSetup.party;
                 return p && p.lastStartError ? String(p.lastStartError) : '';
             },
-            /** Every roster member has marked ready (matches server allMembersReady when roster is complete). */
+            /**
+             * Must NOT depend on `lobbyMemberRows` (that computed also drives per-row `hasSheet` / viewer heuristics).
+             * Mirror server `allMembersReady`: every canonical member id appears in `party.readyUserIds`.
+             */
             partyLobbyAllMembersReady() {
-                const rows = this.lobbyMemberRows;
-                return rows.length > 0 && rows.every((r) => r.isReady);
+                const owner = this.gameOwnerUserId != null ? String(this.gameOwnerUserId) : '';
+                const listed = Array.isArray(this.memberUserIds) ? this.memberUserIds.map(String) : [];
+                const idNorm = new Set();
+                if (owner) idNorm.add(this.normalizeLobbyUserIdKey(owner));
+                for (const x of listed) {
+                    const n = this.normalizeLobbyUserIdKey(x);
+                    if (n) idNorm.add(n);
+                }
+                const readyRaw = this.$store.state.gameSetup && this.$store.state.gameSetup.party;
+                const readyArr = readyRaw && Array.isArray(readyRaw.readyUserIds) ? readyRaw.readyUserIds : [];
+                const readyNorm = new Set(
+                    readyArr.map((x) => this.normalizeLobbyUserIdKey(x)).filter(Boolean)
+                );
+                if (idNorm.size === 0) return false;
+                for (const id of idNorm) {
+                    if (!readyNorm.has(id)) return false;
+                }
+                return true;
             },
             /** Lobby toolbar + inline setup: no further ready toggles while starting or everyone is ready. */
             partyLobbyActionsFrozen() {
                 return this.partyLobbyAllMembersReady || this.partyPhase === 'starting';
+            },
+            /**
+             * Roster “your row” primary control: do NOT tie to `partyPhase === 'starting'`. If a start attempt
+             * stalls, `starting` + empty `readyUserIds` would grey out Pendiente forever while the UI still
+             * looks like the lobby. Freeze only when every canonical member is already in `readyUserIds`.
+             */
+            partyLobbyRosterOwnRowFrozen() {
+                return this.partyLobbyAllMembersReady;
             },
             /** Invited player has already pressed mark ready — hide “edit character” so they cannot reopen the wizard. */
             viewerLobbyMarkedReady() {
@@ -521,53 +640,111 @@ export default {
                 const ids = gs && gs.party && Array.isArray(gs.party.readyUserIds) ? gs.party.readyUserIds : [];
                 return ids.map(String).includes(String(uid));
             },
+            /**
+             * Same object the lobby embedded sheet uses (`playerCharacter`), plus inline confirm from SetupForm.
+             * Avoids false “no sheet” when `playerCharacters` keys disagree but the visible sheet is fine.
+             */
+            viewerHasLobbyReadySheet() {
+                const uid = this.myUserIdStr;
+                if (!uid) return false;
+                if (this.lobbyInlineConfirmSheet && typeof this.lobbyInlineConfirmSheet === 'object') {
+                    return true;
+                }
+                return this.lobbySheetIsCommitted(this.playerCharacter);
+            },
             lobbyMemberRows() {
                 const gs = this.$store.state.gameSetup;
                 const listed = Array.isArray(this.memberUserIds) ? this.memberUserIds.map(String) : [];
                 const owner = this.gameOwnerUserId ? String(this.gameOwnerUserId) : '';
-                const idSet = new Set(listed);
+                const pcMap =
+                    gs && gs.playerCharacters && typeof gs.playerCharacters === 'object' && !Array.isArray(gs.playerCharacters)
+                        ? gs.playerCharacters
+                        : {};
+                const idSet = new Set([...listed, ...Object.keys(pcMap).map(String)]);
                 if (owner) idSet.add(owner);
                 const ready = new Set(
-                    (gs && gs.party && Array.isArray(gs.party.readyUserIds) ? gs.party.readyUserIds : []).map(String)
+                    (gs && gs.party && Array.isArray(gs.party.readyUserIds) ? gs.party.readyUserIds : [])
+                        .map((x) => this.normalizeLobbyUserIdKey(x))
+                        .filter(Boolean)
                 );
                 const uid = this.myUserIdStr;
+                const ownerNorm = owner ? this.normalizeLobbyUserIdKey(owner) : '';
                 const ids = [...idSet];
                 ids.sort((a, b) => {
-                    if (owner) {
-                        if (a === owner) return -1;
-                        if (b === owner) return 1;
+                    if (ownerNorm) {
+                        if (this.normalizeLobbyUserIdKey(a) === ownerNorm) return -1;
+                        if (this.normalizeLobbyUserIdKey(b) === ownerNorm) return 1;
                     }
                     return a.localeCompare(b);
                 });
                 return ids.map((id) => {
-                    const hasSheet = this.memberHasCommittedSheet(id);
-                    const sheet = this.pickPlayerCharacterFromStore(id);
+                    const isYou = Boolean(uid && this.normalizeLobbyUserIdKey(id) === this.normalizeLobbyUserIdKey(uid));
+                    const sheet = isYou
+                        ? (this.lobbyInlineConfirmSheet && typeof this.lobbyInlineConfirmSheet === 'object'
+                              ? this.lobbyInlineConfirmSheet
+                              : this.effectivePlayerCharacterForMember(id))
+                        : this.effectivePlayerCharacterForMember(id);
+                    const hasSheet = isYou ? this.viewerHasLobbyReadySheet : this.lobbySheetIsCommitted(sheet);
                     const primary = this.memberPrimaryLabel(id);
-                    const isYou = Boolean(uid && id === uid);
-                    const isHost = Boolean(owner && id === owner);
+                    const isHost = Boolean(ownerNorm && this.normalizeLobbyUserIdKey(id) === ownerNorm);
                     let display = primary;
                     if (isYou) display += ` (${this.$i18n.party_you})`;
                     if (isHost) display += ` — ${this.$i18n.party_host}`;
                     const detailsLine = hasSheet ? this.formatPartyMemberSheetSummary(sheet) : '';
+                    let initial = '?';
+                    if (hasSheet && sheet && typeof sheet === 'object') {
+                        const nm =
+                            (typeof sheet.name === 'string' && sheet.name.trim()) ||
+                            (sheet.identity &&
+                                typeof sheet.identity === 'object' &&
+                                typeof sheet.identity.name === 'string' &&
+                                sheet.identity.name.trim()) ||
+                            '';
+                        if (nm) initial = this.lobbyAvatarInitialsFromDisplayName(nm);
+                    }
+                    if (initial === '?') {
+                        const p = String(primary || '').trim();
+                        if (p) initial = this.lobbyAvatarInitialsFromDisplayName(p);
+                    }
                     return {
                         id,
                         display,
                         detailsLine,
                         hasSheet,
-                        isReady: ready.has(id),
+                        isReady: ready.has(this.normalizeLobbyUserIdKey(id)),
+                        initial,
+                        isYou,
+                        isHost,
                     };
                 });
             },
-            /** After confirm step (mark ready / return), hide wizard until player opens “edit”. */
+            /**
+             * After confirm step (or on refresh with a saved sheet), hide inline wizard until “edit character”.
+             * - Session flag: set on success paths.
+             * - Server: committed sheet + wizard not holding the UI (see lobbyInlineWizardHold / SetupForm emits).
+             * Flow “done” uses committed sheet + wizard hold; ready state is party.readyUserIds (roster column).
+             */
             lobbyCharacterFlowDoneForGame() {
                 const gid =
                     this.$store.state.gameId || (this.$route.params.id ? String(this.$route.params.id) : '');
                 if (!gid) return false;
                 try {
-                    return sessionStorage.getItem(`dm_lobby_char_done_${gid}`) === '1';
+                    if (sessionStorage.getItem(`dm_lobby_char_done_${gid}`) === '1') return true;
                 } catch (e) {
-                    return false;
+                    /* ignore */
                 }
+                if (this.lobbyInlineWizardHold || this.lobbyCharacterEditorOpen) return false;
+                const uid = this.myUserIdStr;
+                if (!uid) return false;
+                const fromStore = this.pickPlayerCharacterFromStore(uid);
+                const local =
+                    this.localPlayerCharacter && typeof this.localPlayerCharacter === 'object'
+                        ? this.localPlayerCharacter
+                        : null;
+                const sheet =
+                    fromStore && typeof fromStore === 'object' ? fromStore : local;
+                if (!sheet || !this.lobbySheetIsCommitted(sheet)) return false;
+                return true;
             },
             showLobbyCharacterSetupPanel() {
                 if (!this.isPartyLobby) return false;
@@ -586,40 +763,166 @@ export default {
                 if (this.viewerLobbyMarkedReady) return false;
                 return true;
             },
+            /**
+             * In lobby, only show the in-flow sheet when this game has a saved PC for the viewer.
+             * Avoids stale localPlayerCharacter / Vuex bleed from another game while the inline wizard is open.
+             */
+            showPartyLobbyEmbeddedCharacterSheet() {
+                if (!this.isPartyLobby) return false;
+                if (this.showLobbyCharacterSetupPanel) return false;
+                const uid = this.myUserIdStr;
+                return Boolean(uid && this.memberHasCommittedSheet(uid));
+            },
+            /** Opt-in: query partyLobbyDebug=1 or localStorage key dm_party_lobby_debug === 1. */
+            partyLobbyDebugEnabled() {
+                try {
+                    const q = this.$route && this.$route.query ? this.$route.query.partyLobbyDebug : null;
+                    const qs = q != null ? String(q).toLowerCase() : '';
+                    if (qs === '1' || qs === 'true' || qs === 'yes') return true;
+                } catch (e) {
+                    /* ignore */
+                }
+                try {
+                    return typeof localStorage !== 'undefined' && localStorage.getItem('dm_party_lobby_debug') === '1';
+                } catch (e) {
+                    return false;
+                }
+            },
+            partyLobbyDebugPayload() {
+                if (!this.partyLobbyDebugEnabled) return null;
+                const gs = this.$store.state.gameSetup || {};
+                const party = gs.party || {};
+                const pcMap = gs.playerCharacters && typeof gs.playerCharacters === 'object' ? gs.playerCharacters : {};
+                const pcKeys = Object.keys(pcMap);
+                const yourRow = (this.lobbyMemberRows || []).find((r) => r.isYou) || null;
+                const rosterBranch = yourRow
+                    ? yourRow.isYou && !yourRow.isReady && !this.partyLobbyRosterOwnRowFrozen
+                        ? yourRow.hasSheet
+                            ? 'primary_cta_confirm_ready'
+                            : 'inner_disabled_waiting_sheet'
+                        : 'outer_badge_readonly'
+                    : 'no_your_row';
+                return {
+                    at: new Date().toISOString(),
+                    reason: 'snapshot',
+                    gameId: this.$store.state.gameId,
+                    routeGameId: this.$route.params.id,
+                    partyPhase: this.partyPhase,
+                    isPartyLobby: this.isPartyLobby,
+                    myUserIdStr: this.myUserIdStr,
+                    myUserIdNorm: this.normalizeLobbyUserIdKey(this.myUserIdStr),
+                    viewerIsGameOwner: this.viewerIsGameOwner,
+                    gameOwnerUserId: this.gameOwnerUserId,
+                    ownerNorm: this.normalizeLobbyUserIdKey(this.gameOwnerUserId),
+                    memberUserIds: [...(this.memberUserIds || [])],
+                    readyUserIdsRaw: [...(party.readyUserIds || [])],
+                    readyUserIdsNorm: (party.readyUserIds || [])
+                        .map((x) => this.normalizeLobbyUserIdKey(x))
+                        .filter(Boolean),
+                    partyLobbyAllMembersReady: this.partyLobbyAllMembersReady,
+                    partyLobbyRosterOwnRowFrozen: this.partyLobbyRosterOwnRowFrozen,
+                    partyLobbyActionsFrozen: this.partyLobbyActionsFrozen,
+                    viewerHasLobbyReadySheet: this.viewerHasLobbyReadySheet,
+                    lobbyInlineConfirmSheet: Boolean(this.lobbyInlineConfirmSheet),
+                    lobbyRosterConfirmPosting: this.lobbyRosterConfirmPosting,
+                    memberHasCommittedSheet_me: this.myUserIdStr
+                        ? this.memberHasCommittedSheet(this.myUserIdStr)
+                        : false,
+                    playerCharacters_keys: pcKeys,
+                    yourRosterRow: yourRow,
+                    rosterUiBranch: rosterBranch,
+                    showPrimaryReadyButton: Boolean(
+                        yourRow &&
+                            yourRow.isYou &&
+                            !yourRow.isReady &&
+                            !this.partyLobbyRosterOwnRowFrozen &&
+                            yourRow.hasSheet
+                    ),
+                };
+            },
+            partyLobbyDebugText() {
+                if (!this.partyLobbyDebugEnabled) return '';
+                try {
+                    return JSON.stringify(this.partyLobbyDebugPayload, null, 2);
+                } catch (e) {
+                    return String(e && e.message ? e.message : e);
+                }
+            },
+            partyLobbyDebugFingerprint() {
+                if (!(this.partyLobbyDebugEnabled && this.isPartyLobby)) return '';
+                const p = this.partyLobbyDebugPayload;
+                if (!p) return '';
+                return [
+                    p.partyPhase,
+                    p.myUserIdStr,
+                    p.partyLobbyAllMembersReady ? '1' : '0',
+                    p.partyLobbyRosterOwnRowFrozen ? '1' : '0',
+                    p.viewerHasLobbyReadySheet ? '1' : '0',
+                    p.lobbyInlineConfirmSheet ? '1' : '0',
+                    p.memberHasCommittedSheet_me ? '1' : '0',
+                    p.rosterUiBranch,
+                    JSON.stringify(p.readyUserIdsNorm || []),
+                    (p.yourRosterRow && p.yourRosterRow.id) || '',
+                    p.yourRosterRow && p.yourRosterRow.isReady ? '1' : '0',
+                    p.yourRosterRow && p.yourRosterRow.hasSheet ? '1' : '0',
+                ].join('|');
+            },
         },
 
         watch: {
             '$store.state.gameId'(to, from) {
                 if (String(to ?? '') !== String(from ?? '')) {
                     this.lobbyCharacterEditorOpen = false;
+                    this.lobbyInlineWizardHold = false;
+                    this.localPlayerCharacter = null;
+                    this.lobbyInlineConfirmSheet = null;
                 }
             },
-            partyPhase(ph) {
-                if (ph === 'starting') {
-                    if (this.lobbyStartingPollTimer) clearInterval(this.lobbyStartingPollTimer);
-                    this.lobbyStartingPollTimer = null;
-                    /* WebSocket delivers game-state-updated; poll only if push is down (rare safety). */
-                    const pushOpen =
-                        this.gameStateWebSocket && this.gameStateWebSocket.readyState === WebSocket.OPEN;
-                    if (pushOpen) return;
-                    const lobbyPollMs = 45000;
-                    this.lobbyStartingPollTimer = setInterval(() => {
-                        if (this.partyPhase !== 'starting') {
-                            clearInterval(this.lobbyStartingPollTimer);
-                            this.lobbyStartingPollTimer = null;
-                            return;
-                        }
-                        if (!this.syncBusy && !this.isSending) {
-                            void this.syncFromServer();
-                        }
-                    }, lobbyPollMs);
-                } else if (this.lobbyStartingPollTimer) {
-                    clearInterval(this.lobbyStartingPollTimer);
-                    this.lobbyStartingPollTimer = null;
-                }
+            '$route.params.id'(to, from) {
+                if (!this.$store.getters.isAuthenticated) return;
+                const next = to != null && String(to).trim() !== '' ? String(to).trim() : '';
+                const prev = from != null && String(from).trim() !== '' ? String(from).trim() : '';
+                if (!next || next === prev) return;
+                this.localPlayerCharacter = null;
+                this.lobbyCharacterEditorOpen = false;
+                this.lobbyInlineWizardHold = false;
+                this.lobbyInlineConfirmSheet = null;
+                void this.loadGameState(next, { replaceLocalCharacter: true });
+            },
+            partyLobbyDebugFingerprint() {
+                if (!this.partyLobbyDebugEnabled || !this.isPartyLobby) return;
+                this.logPartyLobbyDebug('watch');
+            },
+            partyPhase: {
+                immediate: true,
+                handler(ph) {
+                    if (ph === 'starting') {
+                        this.showInviteToast(this.$i18n.lobby_starting, 'success', 5600);
+                        if (this.lobbyStartingPollTimer) clearInterval(this.lobbyStartingPollTimer);
+                        this.lobbyStartingPollTimer = null;
+                        /* SSE delivers game-state-updated; poll only if push is down (rare safety). */
+                        const pushOpen =
+                            this.gameStateEventSource && this.gameStateEventSource.readyState === EventSource.OPEN;
+                        if (pushOpen) return;
+                        const lobbyPollMs = 45000;
+                        this.lobbyStartingPollTimer = setInterval(() => {
+                            if (this.partyPhase !== 'starting') {
+                                clearInterval(this.lobbyStartingPollTimer);
+                                this.lobbyStartingPollTimer = null;
+                                return;
+                            }
+                            if (!this.syncBusy && !this.isSending) {
+                                void this.syncFromServer();
+                            }
+                        }, lobbyPollMs);
+                    } else if (this.lobbyStartingPollTimer) {
+                        clearInterval(this.lobbyStartingPollTimer);
+                        this.lobbyStartingPollTimer = null;
+                    }
+                },
             },
             gameSessionBroadcastActive() {
-                this.$nextTick(() => this.maybeStartGameStateWebSocket());
+                this.$nextTick(() => this.maybeStartGameStateEventSource());
             },
             'messages.length'(n, o) {
                 if (n === 0) return;
@@ -646,9 +949,12 @@ export default {
             this.onPageHideKeepalive = () => this.flushKeepaliveAppend();
             window.addEventListener('pagehide', this.onPageHideKeepalive);
             this.$nextTick(() => {
-                this.maybeStartGameStateWebSocket();
+                this.maybeStartGameStateEventSource();
                 this.scrollChatToBottom({ smooth: false });
                 this.flushSessionChatToast();
+                if (this.partyLobbyDebugEnabled) {
+                    this.logPartyLobbyDebug('mounted');
+                }
             });
         },
 
@@ -670,7 +976,7 @@ export default {
                 this.inviteToastTimer = null;
             }
             this.stopPendingReplyPoller();
-            this.stopGameStateWebSocket();
+            this.stopGameStateEventSource();
         },
 
         methods: {
@@ -690,10 +996,23 @@ export default {
                 if (labels[keyUnderscore]) return labels[keyUnderscore];
                 return s;
             },
-            /** Race · class · subclass — Level n (localized); empty if no sheet fields. */
+            localizePartySubraceLabel(subraceRaw) {
+                const s = String(subraceRaw || '').trim();
+                if (!s || s.toLowerCase() === 'random') return '';
+                const labels = this.$i18n.subrace_labels || {};
+                const keyUnderscore = s.toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_');
+                if (labels[keyUnderscore]) return labels[keyUnderscore];
+                return s;
+            },
+            /** Race · subrace · class · subclass — Level n (localized); empty if no sheet fields. */
             formatPartyMemberSheetSummary(sheet) {
                 if (!sheet || typeof sheet !== 'object') return '';
                 const race = this.localizePartySheetField(sheet.race, this.$i18n.races || []);
+                const subraceSrc =
+                    sheet.subrace != null && String(sheet.subrace).trim()
+                        ? sheet.subrace
+                        : sheet.subraceId;
+                const subraceLine = this.localizePartySubraceLabel(subraceSrc);
                 const clsRaw =
                     sheet.class != null && String(sheet.class).trim()
                         ? sheet.class
@@ -710,6 +1029,7 @@ export default {
                         : null;
                 const parts = [];
                 if (race) parts.push(race);
+                if (subraceLine) parts.push(subraceLine);
                 if (cls) parts.push(cls);
                 if (sub) parts.push(sub);
                 let line = parts.join(' · ');
@@ -719,34 +1039,123 @@ export default {
                 }
                 return line;
             },
+            normalizeLobbyUserIdKey(raw) {
+                if (raw == null) return '';
+                return String(raw).trim().toLowerCase();
+            },
+            /** True when the sheet is usable for lobby roster / ready (name, summary line, or core stats). */
+            lobbySheetIsCommitted(sheet) {
+                if (!sheet || typeof sheet !== 'object') return false;
+                if (this.committedCharacterDisplayName(sheet)) return true;
+                if (this.formatPartyMemberSheetSummary(sheet)) return true;
+                const hp = Number(sheet.max_hp);
+                const ac = Number(sheet.ac);
+                return Number.isFinite(hp) && Number.isFinite(ac);
+            },
             pickPlayerCharacterFromStore(memberId) {
-                const id = memberId != null ? String(memberId) : '';
-                if (!id) return null;
+                const want = this.normalizeLobbyUserIdKey(memberId);
+                if (!want) return null;
                 const gs = this.$store.state.gameSetup;
                 if (!gs) return null;
                 const pcMap =
-                    gs.playerCharacters && typeof gs.playerCharacters === 'object' ? gs.playerCharacters : {};
-                const sheet = pcMap[id];
-                if (sheet && typeof sheet === 'object') return sheet;
-                for (const k of Object.keys(pcMap)) {
-                    if (String(k) === id && pcMap[k] && typeof pcMap[k] === 'object') return pcMap[k];
+                    gs.playerCharacters && typeof gs.playerCharacters === 'object' && !Array.isArray(gs.playerCharacters)
+                        ? gs.playerCharacters
+                        : {};
+                const keys = Object.keys(pcMap);
+                for (const k of keys) {
+                    if (this.normalizeLobbyUserIdKey(k) === want && pcMap[k] && typeof pcMap[k] === 'object') {
+                        return pcMap[k];
+                    }
+                }
+                const nonEmpty = keys.filter((k) => pcMap[k] && typeof pcMap[k] === 'object');
+                if (nonEmpty.length === 1) {
+                    const only = pcMap[nonEmpty[0]];
+                    const ownerN = this.normalizeLobbyUserIdKey(this.gameOwnerUserId);
+                    const listed = Array.isArray(this.memberUserIds) ? this.memberUserIds : [];
+                    const listedNorm = listed.map((x) => this.normalizeLobbyUserIdKey(x));
+                    const soleHostParty =
+                        ownerN &&
+                        want === ownerN &&
+                        (listedNorm.length === 0 ||
+                            (listedNorm.length === 1 && listedNorm[0] === ownerN));
+                    const soleListedYou = listedNorm.length === 1 && listedNorm[0] === want;
+                    if (soleHostParty || soleListedYou) {
+                        return only;
+                    }
                 }
                 return null;
             },
+            /**
+             * Store row plus, for the current user only, lobby `localPlayerCharacter` (sheet visible before
+             * Vuex catches up). Shallow-merge so draft edits overlay persisted keys.
+             */
+            effectivePlayerCharacterForMember(memberId) {
+                const id = memberId != null ? String(memberId) : '';
+                if (!id) return null;
+                const fromStore = this.pickPlayerCharacterFromStore(id);
+                const uid = this.myUserIdStr;
+                const isYou = Boolean(uid && this.normalizeLobbyUserIdKey(uid) === this.normalizeLobbyUserIdKey(id));
+                const local =
+                    isYou && this.localPlayerCharacter && typeof this.localPlayerCharacter === 'object'
+                        ? this.localPlayerCharacter
+                        : null;
+                if (local && fromStore && typeof fromStore === 'object') {
+                    return { ...fromStore, ...local };
+                }
+                if (local) return local;
+                if (fromStore && typeof fromStore === 'object') return fromStore;
+                return null;
+            },
+            committedCharacterDisplayName(sheet) {
+                if (!sheet || typeof sheet !== 'object') return '';
+                const top = sheet.name != null && String(sheet.name).trim();
+                if (top) return String(sheet.name).trim();
+                const idn =
+                    sheet.identity &&
+                    typeof sheet.identity === 'object' &&
+                    sheet.identity.name != null &&
+                    String(sheet.identity.name).trim();
+                if (idn) return String(sheet.identity.name).trim();
+                return '';
+            },
             memberHasCommittedSheet(memberId) {
-                const sheet = this.pickPlayerCharacterFromStore(memberId);
-                return Boolean(sheet && sheet.name != null && String(sheet.name).trim());
+                const uid = this.myUserIdStr;
+                if (uid && this.normalizeLobbyUserIdKey(memberId) === this.normalizeLobbyUserIdKey(uid)) {
+                    return this.viewerHasLobbyReadySheet;
+                }
+                return this.lobbySheetIsCommitted(this.effectivePlayerCharacterForMember(memberId));
             },
             /** Character name if saved; else account nickname from load payload; else pending i18n. */
             memberPrimaryLabel(memberId) {
-                const sheet = this.pickPlayerCharacterFromStore(memberId);
-                const charName = sheet && sheet.name != null && String(sheet.name).trim();
-                if (charName) return String(sheet.name).trim();
+                const sheet = this.effectivePlayerCharacterForMember(memberId);
+                const charName = this.committedCharacterDisplayName(sheet);
+                if (charName) return charName;
                 const nid = memberId != null ? String(memberId) : '';
                 const map = this.memberNicknamesByUserId || {};
                 const nick = map[nid] && String(map[nid]).trim();
                 if (nick) return nick;
                 return this.$i18n.party_character_pending;
+            },
+            /**
+             * Party roster avatar: two letters from first + last word when the name has 2+ words;
+             * otherwise one letter. Ignores empty tokens after split.
+             */
+            lobbyAvatarInitialsFromDisplayName(raw) {
+                const s = String(raw || '').trim();
+                if (!s) return '?';
+                const pending = this.$i18n.party_character_pending;
+                if (pending && s === String(pending).trim()) return '?';
+                const parts = s.split(/\s+/).filter((t) => t.length > 0);
+                if (parts.length === 0) return '?';
+                const up = (ch) => (ch ? String(ch).charAt(0).toUpperCase() : '');
+                if (parts.length === 1) {
+                    const one = up(parts[0].charAt(0));
+                    return one || '?';
+                }
+                const a = up(parts[0].charAt(0));
+                const b = up(parts[parts.length - 1].charAt(0));
+                if (a && b) return `${a}${b}`;
+                return a || b || '?';
             },
             openLobbyCharacterEditor() {
                 const gid =
@@ -758,6 +1167,7 @@ export default {
                         /* ignore */
                     }
                 }
+                this.lobbyInlineWizardHold = true;
                 this.lobbyCharacterEditorOpen = true;
             },
             /** Keep the transcript pinned to the latest line after load, send, or DM push. */
@@ -782,95 +1192,86 @@ export default {
                     });
                 });
             },
-            stopGameStateWebSocket() {
-                if (this.gameStateWsReconnectTimer) {
-                    clearTimeout(this.gameStateWsReconnectTimer);
-                    this.gameStateWsReconnectTimer = null;
+            stopGameStateEventSource() {
+                if (this.gameStateEsReconnectTimer) {
+                    clearTimeout(this.gameStateEsReconnectTimer);
+                    this.gameStateEsReconnectTimer = null;
                 }
                 if (this.pushSyncTimer) {
                     clearTimeout(this.pushSyncTimer);
                     this.pushSyncTimer = null;
                 }
-                if (this.gameStateWebSocket) {
+                if (this.gameStateEventSource) {
                     try {
-                        this.gameStateWebSocket.onclose = null;
-                        this.gameStateWebSocket.onerror = null;
-                        this.gameStateWebSocket.onmessage = null;
-                        this.gameStateWebSocket.onopen = null;
-                        this.gameStateWebSocket.close();
+                        this.gameStateEventSource.onerror = null;
+                        this.gameStateEventSource.onopen = null;
+                        this.gameStateEventSource.close();
                     } catch (e) {
                         /* ignore */
                     }
-                    this.gameStateWebSocket = null;
+                    this.gameStateEventSource = null;
                 }
-                this.gameStateWebSocketGameId = null;
+                this.gameStateEventSourceGameId = null;
             },
 
-            scheduleGameStateWebSocketReconnect() {
-                if (this.gameStateWsReconnectTimer) clearTimeout(this.gameStateWsReconnectTimer);
+            scheduleGameStateEventSourceReconnect() {
+                if (this.gameStateEsReconnectTimer) clearTimeout(this.gameStateEsReconnectTimer);
                 const id = this.$route.params.id ? String(this.$route.params.id).trim() : '';
                 if (!id || !this.$store.getters.isAuthenticated) return;
-                const delay = Math.min(Math.max(this.gameStateWsBackoffMs, 500), 30000);
-                this.gameStateWsReconnectTimer = setTimeout(() => {
-                    this.gameStateWsReconnectTimer = null;
-                    this.gameStateWsBackoffMs = Math.min(this.gameStateWsBackoffMs * 2, 30000);
-                    this.maybeStartGameStateWebSocket();
+                const delay = Math.min(Math.max(this.gameStateEsBackoffMs, 500), 30000);
+                this.gameStateEsReconnectTimer = setTimeout(() => {
+                    this.gameStateEsReconnectTimer = null;
+                    this.gameStateEsBackoffMs = Math.min(this.gameStateEsBackoffMs * 2, 30000);
+                    this.maybeStartGameStateEventSource();
                 }, delay);
             },
 
             /**
-             * WebSocket push when GameState changes (same payload shape as legacy SSE).
-             * Reuse OPEN/CONNECTING socket for the same gameId; GET /load only runs after push or explicit refresh.
+             * SSE (GET /api/game-state/events/:gameId) when GameState changes — same notify payload as WS hub.
+             * Reuse OPEN/CONNECTING source for the same gameId; GET /load runs after push or explicit refresh.
              */
-            maybeStartGameStateWebSocket() {
+            maybeStartGameStateEventSource() {
                 const id = this.$route.params.id ? String(this.$route.params.id).trim() : '';
                 const token = this.$store.state.authToken;
                 if (!id || !this.$store.getters.isAuthenticated || !token || !String(token).trim()) {
-                    this.stopGameStateWebSocket();
+                    this.stopGameStateEventSource();
                     return;
                 }
-                const existing = this.gameStateWebSocket;
+                const existing = this.gameStateEventSource;
                 if (
                     existing &&
-                    this.gameStateWebSocketGameId === id &&
-                    (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)
+                    this.gameStateEventSourceGameId === id &&
+                    (existing.readyState === EventSource.CONNECTING || existing.readyState === EventSource.OPEN)
                 ) {
-                    if (this.gameStateWsReconnectTimer) {
-                        clearTimeout(this.gameStateWsReconnectTimer);
-                        this.gameStateWsReconnectTimer = null;
+                    if (this.gameStateEsReconnectTimer) {
+                        clearTimeout(this.gameStateEsReconnectTimer);
+                        this.gameStateEsReconnectTimer = null;
                     }
                     return;
                 }
-                if (this.gameStateWsReconnectTimer) {
-                    clearTimeout(this.gameStateWsReconnectTimer);
-                    this.gameStateWsReconnectTimer = null;
+                if (this.gameStateEsReconnectTimer) {
+                    clearTimeout(this.gameStateEsReconnectTimer);
+                    this.gameStateEsReconnectTimer = null;
                 }
-                this.stopGameStateWebSocket();
-                this.gameStateWebSocketGameId = id;
-                const url = resolveGameStateWebSocketUrl(id, String(token).trim());
-                if (!url || typeof WebSocket === 'undefined') {
-                    this.gameStateWebSocketGameId = null;
+                this.stopGameStateEventSource();
+                this.gameStateEventSourceGameId = id;
+                const url = resolveGameStateEventsUrl(id, String(token).trim());
+                if (!url || typeof EventSource === 'undefined') {
+                    this.gameStateEventSourceGameId = null;
                     return;
                 }
-                let ws;
+                let es;
                 try {
-                    ws = new WebSocket(url);
+                    es = new EventSource(url);
                 } catch (e) {
-                    console.warn('WebSocket failed:', e);
-                    this.gameStateWebSocketGameId = null;
-                    this.scheduleGameStateWebSocketReconnect();
+                    console.warn('EventSource failed:', e);
+                    this.gameStateEventSourceGameId = null;
+                    this.scheduleGameStateEventSourceReconnect();
                     return;
                 }
-                this.gameStateWebSocket = ws;
-                ws.onopen = () => {
-                    this.gameStateWsBackoffMs = 1000;
-                    if (this.lobbyStartingPollTimer) {
-                        clearInterval(this.lobbyStartingPollTimer);
-                        this.lobbyStartingPollTimer = null;
-                    }
-                    this.stopPendingReplyPoller();
-                };
-                ws.onmessage = (ev) => {
+                this.gameStateEventSource = es;
+                const routeId = id;
+                const onMessage = (ev) => {
                     let o;
                     try {
                         o = JSON.parse(ev.data);
@@ -878,7 +1279,7 @@ export default {
                         return;
                     }
                     if (!o || o.type !== 'game-state-updated') return;
-                    if (String(o.gameId || '') !== id) return;
+                    if (String(o.gameId || '') !== routeId) return;
                     if (this.syncBusy || this.isSending) return;
                     if (this.pushSyncTimer) clearTimeout(this.pushSyncTimer);
                     this.pushSyncTimer = setTimeout(() => {
@@ -886,27 +1287,37 @@ export default {
                         this.syncFromServer();
                     }, 350);
                 };
-                ws.onclose = () => {
-                    // If this socket was already replaced (stopGameStateWebSocket + new WebSocket), ignore:
-                    // avoids duplicate reconnect timers and clearing pushSyncTimer owned by the new socket.
-                    if (this.gameStateWebSocket !== ws) {
+                es.addEventListener('message', onMessage);
+                es.onopen = () => {
+                    this.gameStateEsBackoffMs = 1000;
+                    if (this.lobbyStartingPollTimer) {
+                        clearInterval(this.lobbyStartingPollTimer);
+                        this.lobbyStartingPollTimer = null;
+                    }
+                    this.stopPendingReplyPoller();
+                };
+                es.onerror = () => {
+                    if (this.gameStateEventSource !== es) {
                         return;
                     }
-                    this.gameStateWebSocket = null;
-                    this.gameStateWebSocketGameId = null;
+                    try {
+                        es.removeEventListener('message', onMessage);
+                        es.close();
+                    } catch (e) {
+                        /* ignore */
+                    }
+                    this.gameStateEventSource = null;
+                    this.gameStateEventSourceGameId = null;
                     if (this.pushSyncTimer) {
                         clearTimeout(this.pushSyncTimer);
                         this.pushSyncTimer = null;
                     }
-                    if (this.$route.params.id && String(this.$route.params.id).trim() === id && this.$store.getters.isAuthenticated) {
-                        this.scheduleGameStateWebSocketReconnect();
-                    }
-                };
-                ws.onerror = () => {
-                    try {
-                        ws.close();
-                    } catch (e) {
-                        /* ignore */
+                    if (
+                        this.$route.params.id &&
+                        String(this.$route.params.id).trim() === routeId &&
+                        this.$store.getters.isAuthenticated
+                    ) {
+                        this.scheduleGameStateEventSourceReconnect();
                     }
                 };
             },
@@ -951,7 +1362,7 @@ export default {
             },
 
             /**
-             * Rare HTTP fallback when WebSocket is down; with a live socket, push drives GET /load (no interval poll).
+             * Rare HTTP fallback when SSE is down; with a live EventSource, push drives GET /load (no interval poll).
              */
             maybeStartPendingReplyPoller() {
                 if (!this.conversationEndsAwaitingAssistant) {
@@ -962,7 +1373,7 @@ export default {
                     this.stopPendingReplyPoller();
                     return;
                 }
-                const pushOpen = this.gameStateWebSocket && this.gameStateWebSocket.readyState === WebSocket.OPEN;
+                const pushOpen = this.gameStateEventSource && this.gameStateEventSource.readyState === EventSource.OPEN;
                 if (pushOpen) {
                     this.stopPendingReplyPoller();
                     return;
@@ -979,7 +1390,7 @@ export default {
                 const maxTicks = broadcast ? 24 : 36;
                 const intervalMs = broadcast ? 120000 : 90000;
                 const run = async () => {
-                    if (this.gameStateWebSocket && this.gameStateWebSocket.readyState === WebSocket.OPEN) {
+                    if (this.gameStateEventSource && this.gameStateEventSource.readyState === EventSource.OPEN) {
                         this.stopPendingReplyPoller();
                         return;
                     }
@@ -1066,7 +1477,7 @@ export default {
                     this.localPlayerCharacter = { ...this.localPlayerCharacter, coinage: cur };
                 }
             },
-            showInviteToast(message, variant = 'success') {
+            showInviteToast(message, variant = 'success', durationMs = 3200) {
                 if (this.inviteToastTimer) {
                     clearTimeout(this.inviteToastTimer);
                     this.inviteToastTimer = null;
@@ -1074,10 +1485,11 @@ export default {
                 this.inviteToastMessage = message;
                 this.inviteToastVariant = variant;
                 this.inviteToastVisible = true;
+                const ms = typeof durationMs === 'number' && durationMs > 0 ? durationMs : 3200;
                 this.inviteToastTimer = setTimeout(() => {
                     this.inviteToastVisible = false;
                     this.inviteToastTimer = null;
-                }, 3200);
+                }, ms);
             },
             flushSessionChatToast() {
                 try {
@@ -1121,7 +1533,7 @@ export default {
 
             /**
              * Pull latest conversation from DB (other players / other tabs).
-             * WebSocket (`/api/game-state/ws/:gameId`) signals updates; this GET applies the snapshot.
+             * SSE (`/api/game-state/events/:gameId`) signals updates; this GET applies the snapshot.
              */
             async syncFromServer() {
                 const id = this.$route.params.id ? String(this.$route.params.id).trim() : '';
@@ -1138,12 +1550,179 @@ export default {
                 }
             },
 
+            onLobbyInlineWizardHold(val) {
+                this.lobbyInlineWizardHold = Boolean(val);
+            },
+
+            onLobbyInlineConfirmSheet(sheet) {
+                this.lobbyInlineConfirmSheet = sheet && typeof sheet === 'object' ? sheet : null;
+            },
+
+            logPartyLobbyDebug(reason) {
+                if (!this.partyLobbyDebugEnabled) return;
+                const payload = this.partyLobbyDebugPayload;
+                if (!payload) return;
+                const line = { ...payload, reason };
+                try {
+                    console.info('[GameMasterAI party-lobby]', line);
+                } catch (e) {
+                    /* ignore */
+                }
+            },
+
+            /** Roster “Ready to start” for your row: same commit+ready flow as SetupForm (or POST party-ready if wizard unmounted). */
+            async confirmReadyFromRosterCell() {
+                if (this.partyLobbyDebugEnabled) {
+                    console.info('[GameMasterAI party-lobby] confirmReadyFromRosterCell click', {
+                        isPartyLobby: this.isPartyLobby,
+                        partyPhase: this.partyPhase,
+                        rosterOwnRowFrozen: this.partyLobbyRosterOwnRowFrozen,
+                        posting: this.lobbyRosterConfirmPosting,
+                        uid: this.myUserIdStr,
+                        memberHasCommittedSheet: this.myUserIdStr
+                            ? this.memberHasCommittedSheet(this.myUserIdStr)
+                            : false,
+                    });
+                }
+                if (!this.isPartyLobby) {
+                    if (this.partyLobbyDebugEnabled) {
+                        console.warn('[GameMasterAI party-lobby] confirm blocked: not party lobby UI', {
+                            partyPhase: this.partyPhase,
+                        });
+                    }
+                    return;
+                }
+                if (this.partyLobbyRosterOwnRowFrozen) {
+                    if (this.partyLobbyDebugEnabled) {
+                        console.warn('[GameMasterAI party-lobby] confirm blocked: roster row frozen', {
+                            partyLobbyAllMembersReady: this.partyLobbyAllMembersReady,
+                            readyUserIds: (this.$store.state.gameSetup &&
+                                this.$store.state.gameSetup.party &&
+                                this.$store.state.gameSetup.party.readyUserIds) || [],
+                        });
+                    }
+                    return;
+                }
+                if (this.lobbyRosterConfirmPosting) {
+                    if (this.partyLobbyDebugEnabled) {
+                        console.warn('[GameMasterAI party-lobby] confirm blocked: already posting');
+                    }
+                    return;
+                }
+                const uid = this.myUserIdStr;
+                if (!uid || !this.memberHasCommittedSheet(uid)) {
+                    if (this.partyLobbyDebugEnabled) {
+                        console.warn('[GameMasterAI party-lobby] confirm blocked: no uid or sheet not committed', {
+                            uid: uid || '',
+                            memberHasCommittedSheet: uid ? this.memberHasCommittedSheet(uid) : false,
+                            viewerHasLobbyReadySheet: this.viewerHasLobbyReadySheet,
+                        });
+                    }
+                    return;
+                }
+                this.lobbyRosterConfirmPosting = true;
+                try {
+                    const setup = this.$refs.lobbyInlineSetup;
+                    if (setup && typeof setup.runLobbyRosterConfirmAndReady === 'function') {
+                        const handled = await setup.runLobbyRosterConfirmAndReady();
+                        if (handled) return;
+                    }
+                    await this.postPartyReadyFromLobbyRoster();
+                } finally {
+                    this.lobbyRosterConfirmPosting = false;
+                }
+            },
+
+            async postPartyReadyFromLobbyRoster() {
+                const uid = this.myUserIdStr;
+                if (!uid || !this.memberHasCommittedSheet(uid)) return;
+                const gid0 =
+                    (this.$store.state.gameId && String(this.$store.state.gameId).trim()) ||
+                    (this.$route.params.id ? String(this.$route.params.id).trim() : '');
+                if (!gid0) {
+                    this.showInviteToast(this.$i18n.join_missing_game_id, 'error');
+                    return;
+                }
+                try {
+                    const postPartyReady = () =>
+                        axios.post('/api/game-state/party-ready', { gameId: gid0, ready: true });
+                    let readyRes;
+                    try {
+                        readyRes = await postPartyReady();
+                    } catch (eFirst) {
+                        const c0 = eFirst.response && eFirst.response.data && eFirst.response.data.code;
+                        if (c0 === 'PARTY_READY_NEEDS_CHARACTER') {
+                            await new Promise((r) => setTimeout(r, 450));
+                            await this.loadGameState(gid0, { replaceLocalCharacter: true });
+                            readyRes = await postPartyReady();
+                        } else {
+                            throw eFirst;
+                        }
+                    }
+                    const { data } = readyRes;
+                    if (data && data.gameSetup) {
+                        this.$store.commit('setGameSetup', data.gameSetup);
+                    }
+                    const meta = data && data.partyReadyMeta;
+                    let partyStartHardFail = false;
+                    if (meta && meta.allMembersHaveSheets && meta.allMembersReady) {
+                        try {
+                            await axios.post('/api/game-session/start-party-adventure', { gameId: gid0 });
+                        } catch (startErr) {
+                            const code =
+                                startErr.response && startErr.response.data && startErr.response.data.code;
+                            if (
+                                code === 'PARTY_START_IN_PROGRESS' ||
+                                code === 'PARTY_NOT_READY' ||
+                                code === 'PARTY_SHEETS_INCOMPLETE'
+                            ) {
+                                /* benign race */
+                            } else {
+                                partyStartHardFail = true;
+                                const detail =
+                                    startErr.response && startErr.response.data && startErr.response.data.error;
+                                const errCode =
+                                    startErr.response && startErr.response.data && startErr.response.data.code;
+                                const suffix =
+                                    errCode && String(errCode).trim() ? ` (${String(errCode).trim()})` : '';
+                                this.showInviteToast(
+                                    (detail || startErr.message || this.$i18n.error_saving_game) + suffix,
+                                    'error'
+                                );
+                            }
+                        }
+                    }
+                    if (partyStartHardFail) {
+                        return;
+                    }
+                    const donePayload = { gameId: gid0 };
+                    if (data && data.ownerUserId != null && String(data.ownerUserId).trim() !== '') {
+                        donePayload.ownerUserId = String(data.ownerUserId).trim();
+                        donePayload.viewerIsGameOwner = donePayload.ownerUserId === String(uid).trim();
+                    }
+                    this.onLobbyInlineCharacterDone(donePayload);
+                } catch (e) {
+                    const code = e.response && e.response.data && e.response.data.code;
+                    const msg =
+                        (e.response && e.response.data && e.response.data.error) ||
+                        e.message ||
+                        this.$i18n.error_saving_game;
+                    if (code === 'PARTY_READY_NEEDS_CHARACTER') {
+                        this.showInviteToast(this.$i18n.party_ready_needs_character, 'error');
+                    } else {
+                        this.showInviteToast(msg, 'error');
+                    }
+                }
+            },
+
             onLobbyInlineCharacterDone(payload) {
                 const p = payload && typeof payload === 'object' ? payload : {};
                 const gid =
                     this.$store.state.gameId ||
                     (this.$route.params.id ? String(this.$route.params.id) : '') ||
                     (p.gameId != null ? String(p.gameId) : '');
+                this.lobbyInlineWizardHold = false;
+                this.lobbyInlineConfirmSheet = null;
                 if (gid) {
                     try {
                         sessionStorage.setItem(`dm_lobby_char_done_${gid}`, '1');
@@ -1376,6 +1955,31 @@ export default {
                     if (st === 401 && !this.$store.getters.isAuthenticated) {
                         return false;
                     }
+                    if (
+                        st === 404 &&
+                        this.$route.params.id &&
+                        String(this.$route.params.id).trim() === gidRaw
+                    ) {
+                        this.stopGameStateEventSource();
+                        try {
+                            sessionStorage.setItem(
+                                SESSION_CHAT_TOAST,
+                                JSON.stringify({
+                                    message: this.$i18n.game_load_not_found,
+                                    variant: 'error',
+                                })
+                            );
+                        } catch (e) {
+                            /* ignore */
+                        }
+                        this.$store.commit('setGameId', null);
+                        try {
+                            await this.$router.replace({ name: 'LoadGame' });
+                        } catch (e) {
+                            /* ignore */
+                        }
+                        return false;
+                    }
                     console.error('Error loading game state:', error);
                     return false;
                 }
@@ -1482,7 +2086,7 @@ export default {
                     }
 
                     this.$nextTick(() => {
-                        this.maybeStartGameStateWebSocket();
+                        this.maybeStartGameStateEventSource();
                         this.maybeStartPendingReplyPoller();
                         this.scrollChatToBottom({ smooth: false });
                     });
@@ -1497,13 +2101,15 @@ export default {
     };</script>
 
 <style scoped>
+  /* Match app column width (--gm-app-column-max); avoid 640/760 caps that made party vs transcript differ. */
   .chat-room {
     width: 100%;
-    max-width: 640px;
+    max-width: 100%;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    box-sizing: border-box;
   }
 
   .chat-room__transcript {
@@ -1516,8 +2122,9 @@ export default {
     gap: 14px;
     align-items: stretch;
     width: 100%;
-    max-width: 760px;
+    max-width: 100%;
     margin: 0 auto;
+    box-sizing: border-box;
   }
 
   .chat-room__header {
@@ -1525,6 +2132,8 @@ export default {
     flex-direction: column;
     gap: 10px;
     align-items: stretch;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .chat-room__dm-wait {
@@ -1541,6 +2150,8 @@ export default {
   }
 
   .party-roster {
+    width: 100%;
+    box-sizing: border-box;
     font-size: 0.84rem;
     line-height: 1.4;
     color: var(--gm-muted, #9a8f85);
@@ -1618,6 +2229,10 @@ export default {
     gap: 0.35rem;
     flex-wrap: nowrap;
     min-width: 0;
+    width: 100%;
+    max-width: 98%;
+    margin-inline: auto;
+    box-sizing: border-box;
     padding-bottom: 2px;
     border-bottom: 1px solid rgba(212, 180, 106, 0.2);
   }
@@ -1766,18 +2381,81 @@ export default {
   }
 
   .party-lobby {
-    max-width: 560px;
+    --party-lobby-gutter: 12px;
+    /* Roster CTAs + status chips: one width (matches primary “Ready to play” / ES “Listo para jugar”). */
+    --party-lobby-roster-cta-width: 12rem;
+    /* Match .app-layout-root / .app-banner column (theme.css). */
+    --party-lobby-max: 100%;
+    width: 100%;
+    max-width: var(--party-lobby-max);
     margin: 0 auto;
-    gap: 14px;
+    padding: 0.25rem var(--party-lobby-gutter) 1.75rem;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    align-items: stretch;
+    min-height: 0;
   }
+
+  .party-lobby__hero {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: left;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid rgba(212, 180, 106, 0.18);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  }
+
+  .party-lobby__hero-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .party-lobby__hero-text {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .party-lobby__eyebrow {
+    margin: 0 0 0.2rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--gm-gold, #d4b46a);
+    opacity: 0.92;
+  }
+
+  .party-lobby__title {
+    margin: 0 0 0.45rem;
+    font-family: var(--gm-font-serif, Georgia, serif);
+    font-size: clamp(1.35rem, 3.5vw, 1.75rem);
+    font-weight: 600;
+    color: var(--gm-gold-bright, #f0dfa8);
+    line-height: 1.2;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  }
+
   .party-lobby__desc {
     margin: 0;
-    font-size: 0.95rem;
-    line-height: 1.45;
-    opacity: 0.92;
-    color: var(--gm-text, #e8e4dc);
+    font-size: 0.94rem;
+    line-height: 1.5;
+    color: var(--gm-text, #e6e1d8);
+    opacity: 0.94;
+    max-width: 42rem;
   }
+
+  .party-lobby__invite {
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+  }
+
   .party-lobby__err {
+    width: 100%;
+    box-sizing: border-box;
     margin: 0;
     padding: 10px 12px;
     border-radius: 8px;
@@ -1786,99 +2464,348 @@ export default {
     color: #ffc9c0;
     font-size: 0.92rem;
   }
-  .party-lobby__status {
-    margin: 0;
-    font-weight: 600;
-    color: var(--gm-accent, #9ec5fe);
+
+  .party-lobby__debug {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0.5rem 0 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px dashed rgba(120, 200, 255, 0.45);
+    background: rgba(0, 40, 60, 0.35);
+    color: #c8e8ff;
+    font-size: 0.78rem;
+    line-height: 1.35;
   }
+
+  .party-lobby__debug-summary {
+    cursor: pointer;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .party-lobby__debug-hint {
+    margin: 0.35rem 0 0.5rem;
+    opacity: 0.9;
+  }
+
+  .party-lobby__debug-hint code {
+    font-size: 0.72rem;
+    word-break: break-all;
+  }
+
+  .party-lobby__debug-pre {
+    margin: 0;
+    max-height: 42vh;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.7rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #e4f4ff;
+  }
+
+  .party-lobby__roster {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 1rem var(--party-lobby-gutter, 12px) 1.1rem;
+    border-radius: 16px;
+    border: 1px solid rgba(212, 180, 106, 0.28);
+    background: linear-gradient(180deg, rgba(255, 248, 235, 0.08) 0%, rgba(24, 20, 18, 0.58) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 8px 28px rgba(0, 0, 0, 0.35);
+  }
+
+  .party-lobby__roster-title {
+    margin: 0 0 0.65rem;
+    font-family: var(--gm-font-serif, Georgia, serif);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--gm-text, #e6e1d8);
+    letter-spacing: 0.02em;
+  }
+
   .party-lobby__list {
     list-style: none;
     margin: 0;
+    width: 100%;
+    box-sizing: border-box;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
   }
+
+  /* Avatar | player | ready (single status column) */
   .party-lobby__item {
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) minmax(10.5rem, 1.25fr);
+    column-gap: 10px;
+    row-gap: 6px;
+    align-items: center;
+    padding: 10px 6px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .party-lobby__ready-cell {
+    min-width: 0;
     display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .party-lobby__ready-actions {
+    display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 8px 12px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    align-items: stretch;
+    justify-content: flex-end;
+    gap: 0.35rem 0.45rem;
+    width: auto;
+    max-width: 100%;
+    margin-left: auto;
+    box-sizing: border-box;
+  }
+
+  .party-lobby__roster-ready-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--party-lobby-roster-cta-width);
+    min-width: var(--party-lobby-roster-cta-width);
+    max-width: var(--party-lobby-roster-cta-width);
+    flex: 0 0 var(--party-lobby-roster-cta-width);
+    min-height: 2.2rem;
+    box-sizing: border-box;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.32rem 0.42rem;
+    gap: 0.3rem;
+  }
+
+  .party-lobby__roster-regenerate-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--party-lobby-roster-cta-width);
+    min-width: var(--party-lobby-roster-cta-width);
+    max-width: var(--party-lobby-roster-cta-width);
+    flex: 0 0 var(--party-lobby-roster-cta-width);
+    min-height: 2.2rem;
+    box-sizing: border-box;
+    font-size: 0.66rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.32rem 0.4rem;
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: var(--gm-muted, #c4bbb0) !important;
+    border: 1px solid rgba(212, 180, 106, 0.28) !important;
+    box-shadow: none !important;
+  }
+
+  .party-lobby__roster-regenerate-btn:hover {
+    color: var(--gm-text, #e6e1d8) !important;
+    border-color: rgba(212, 180, 106, 0.45) !important;
+    background: rgba(255, 255, 255, 0.09) !important;
+  }
+
+  .party-lobby__roster-ready-btn__inner,
+  .party-lobby__roster-ready-btn__busy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    text-align: center;
+    flex-wrap: wrap;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .party-lobby__roster-ready-btn--blocked {
+    cursor: not-allowed;
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: var(--gm-muted, #9a8f85) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  .party-lobby__roster-ready-btn--blocked:hover,
+  .party-lobby__roster-ready-btn--blocked:active {
+    transform: none !important;
+    box-shadow: none !important;
+  }
+
+  .party-lobby__avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--gm-font-serif, Georgia, serif);
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--gm-gold-bright, #f0dfa8);
+    background: radial-gradient(circle at 30% 25%, rgba(240, 223, 168, 0.2), rgba(40, 28, 22, 0.95));
+    border: 2px solid rgba(212, 180, 106, 0.35);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  .party-lobby__avatar--two {
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
   }
 
   .party-lobby__identity {
-    flex: 1 1 140px;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 3px;
   }
 
-  .party-lobby__meta {
-    font-size: 0.8rem;
-    line-height: 1.3;
-    opacity: 0.82;
-    color: var(--gm-muted, #9a8f85);
-  }
-  .party-lobby__item--head {
-    padding: 6px 12px 4px;
-    background: transparent;
-    border: none;
-    opacity: 0.72;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
   .party-lobby__name {
     font-weight: 600;
+    font-size: 0.95rem;
+    line-height: 1.25;
+    color: var(--gm-text, #e6e1d8);
   }
-  .party-lobby__flags {
+
+  .party-lobby__meta {
+    font-size: 0.78rem;
+    line-height: 1.35;
+    opacity: 0.85;
+    color: var(--gm-muted, #9a8f85);
+  }
+
+  .party-lobby__badge {
     display: flex;
-    gap: 10px;
-    font-size: 0.85rem;
-  }
-  .party-lobby__flags--head {
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.35rem;
+    border-radius: 8px;
     font-size: 0.72rem;
     font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
+    border: 1px solid transparent;
+    min-height: 2.2rem;
+    width: var(--party-lobby-roster-cta-width);
+    min-width: var(--party-lobby-roster-cta-width);
+    max-width: var(--party-lobby-roster-cta-width);
+    flex: 0 0 var(--party-lobby-roster-cta-width);
+    box-sizing: border-box;
   }
-  .party-lobby__flag-cell {
-    min-width: 7.75rem;
-    text-align: right;
+
+  .party-lobby__badge-icon {
+    width: 0.85rem;
+    height: 0.85rem;
+    flex-shrink: 0;
+    opacity: 0.95;
   }
-  .party-lobby__flag-label {
-    color: inherit;
+
+  .party-lobby__badge--ok {
+    background: rgba(60, 110, 70, 0.35);
+    border-color: rgba(143, 217, 155, 0.35);
+    color: #c8f0ce;
   }
-  .party-lobby__flags .ok {
-    color: #8fd99b;
+
+  .party-lobby__badge--wait {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(255, 255, 255, 0.08);
+    color: var(--gm-muted, #9a8f85);
   }
-  .party-lobby__flags .miss {
-    opacity: 0.75;
-  }
+
   .party-lobby__warn {
+    width: 100%;
+    box-sizing: border-box;
     margin: 0;
     font-size: 0.85rem;
-    opacity: 0.85;
+    opacity: 0.9;
     color: #f0c674;
   }
 
-  .party-lobby__open-setup {
-    margin-top: 10px;
-    align-self: flex-start;
+  /* Match .app-banner content inset: lobby root uses --party-lobby-gutter; banner uses --gm-banner-padding-x. */
+  .party-lobby__character-sheet {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    margin-top: 0.5rem;
+    padding-inline: max(0px, calc(var(--gm-banner-padding-x, 1.35rem) - var(--party-lobby-gutter, 12px)));
+    overflow-x: hidden;
+  }
+  .party-lobby__character-sheet :deep(.floating-card--embedded),
+  .party-lobby__character-sheet :deep(.floating-card--embedded .floating-panel.char-sheet-panel) {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  /* Cancel parchment/tab negative margins that bleed past the aligned column */
+  .party-lobby__character-sheet :deep(.char-sheet-hero) {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .party-lobby__character-sheet :deep(.char-sheet-tablist-wrap) {
+    margin-left: 0;
+    margin-right: 0;
   }
 
   .party-lobby__setup {
-    margin-top: 12px;
-    padding: 12px 10px 14px;
-    border-radius: 12px;
-    border: 1px solid rgba(212, 180, 106, 0.22);
-    background: rgba(0, 0, 0, 0.28);
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0;
+    padding: 1rem var(--party-lobby-gutter, 12px) 1.15rem;
+    border-radius: 16px;
+    border: 1px solid rgba(212, 180, 106, 0.28);
+    background: linear-gradient(165deg, rgba(18, 14, 12, 0.92), rgba(28, 22, 18, 0.88));
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     max-height: min(78vh, 720px);
     overflow: auto;
+  }
+
+  /* Embedded confirm sheet only in this section: slightly shorter than default min(70vh,640px) so
+     header + parchment + actions fit the scroll card. Do NOT use container-type:size on .party-lobby__setup —
+     size containment makes auto height ignore children and collapses the whole block. */
+  .party-lobby__setup :deep(.floating-card--embedded .floating-panel.char-sheet-panel) {
+    height: min(58vh, 560px);
+    max-height: min(58vh, 560px);
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .party-lobby__setup :deep(.char-sheet-hero),
+  .party-lobby__setup :deep(.char-sheet-tablist-wrap) {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  /* Inline character form: full lobby width (all setup phases; beats SetupForm .setup-page 520px). */
+  .party-lobby__setup :deep(.setup-page.setup-page--lobby-inline) {
+    max-width: 100%;
+  }
+
+  @media (max-width: 560px) {
+    .party-lobby__item {
+      grid-template-columns: 44px 1fr;
+      grid-template-rows: auto auto;
+    }
+    .party-lobby__identity {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .party-lobby__ready-cell {
+      grid-column: 1 / -1;
+      grid-row: 2;
+    }
   }
 
   .invite-toast {

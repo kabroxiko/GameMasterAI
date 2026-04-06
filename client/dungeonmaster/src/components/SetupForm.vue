@@ -21,7 +21,6 @@
 
         <template v-if="setupPhase === 'confirm_character'">
           <div class="character-confirm-block" role="region" :aria-label="$i18n.setup_confirm_title">
-            <p class="confirm-hint">{{ characterReadyConfirmText }}</p>
             <FloatingCard
               v-if="confirmSheetCharacter"
               :key="'setup-pc-' + characterPreviewKey"
@@ -29,6 +28,7 @@
               :default-open="true"
               embedded
             />
+            <p class="confirm-hint">{{ characterReadyConfirmText }}</p>
             <div class="confirm-actions" :class="{ 'confirm-actions--join-party': usePartyRoomConfirmUi }">
               <template v-if="usePartyRoomConfirmUi && partyLateJoinInviteePlaying">
                 <button
@@ -41,22 +41,26 @@
                   <span v-if="isStarting" class="setup-submit-busy confirm-btn-busy">{{ $i18n.starting }}</span>
                   <span v-else>{{ $i18n.confirm_character_join_game }}</span>
                 </button>
-                <button type="button" class="ui-button secondary confirm-btn" @click="backToForm" :disabled="setupActionDisabled">
-                  {{ $i18n.back_to_edit }}
-                </button>
-                <button
-                  type="button"
-                  class="ui-button secondary confirm-btn"
-                  @click="regenerateCharacter"
-                  :disabled="setupActionDisabled"
-                  :aria-busy="setupBusyAction === 'regenerate'"
+                <div
+                  class="confirm-actions__secondary-row confirm-actions__secondary-row--single"
+                  role="group"
+                  :aria-label="$i18n.confirm_regenerate_action_aria"
                 >
-                  <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
-                  <span v-else>{{ $i18n.regenerate_character }}</span>
-                </button>
+                  <button
+                    type="button"
+                    class="ui-button secondary confirm-btn"
+                    @click="regenerateCharacter"
+                    :disabled="setupActionDisabled"
+                    :aria-busy="setupBusyAction === 'regenerate'"
+                  >
+                    <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
+                    <span v-else>{{ $i18n.regenerate_character }}</span>
+                  </button>
+                </div>
               </template>
               <template v-else-if="usePartyRoomConfirmUi">
                 <button
+                  v-if="!lobbyInline"
                   type="button"
                   class="ui-button confirm-btn confirm-btn--primary confirm-btn--join-party"
                   @click="confirmPartyLobbyCharacter"
@@ -66,34 +70,39 @@
                   <span v-if="isStarting" class="setup-submit-busy confirm-btn-busy">{{ confirmPartyLobbyBusyLabel }}</span>
                   <span v-else>{{ $i18n.confirm_character_mark_ready }}</span>
                 </button>
-                <button type="button" class="ui-button secondary confirm-btn" @click="backToForm" :disabled="setupActionDisabled">
-                  {{ $i18n.back_to_edit }}
-                </button>
-                <button
-                  type="button"
-                  class="ui-button secondary confirm-btn"
-                  @click="regenerateCharacter"
-                  :disabled="setupActionDisabled"
-                  :aria-busy="setupBusyAction === 'regenerate'"
+                <div
+                  class="confirm-actions__secondary-row confirm-actions__secondary-row--single"
+                  role="group"
+                  :aria-label="$i18n.confirm_regenerate_action_aria"
                 >
-                  <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
-                  <span v-else>{{ $i18n.regenerate_character }}</span>
-                </button>
+                  <button
+                    type="button"
+                    class="ui-button secondary confirm-btn"
+                    @click="regenerateCharacter"
+                    :disabled="setupActionDisabled"
+                    :aria-busy="setupBusyAction === 'regenerate'"
+                  >
+                    <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
+                    <span v-else>{{ $i18n.regenerate_character }}</span>
+                  </button>
+                </div>
               </template>
               <template v-else>
-                <button type="button" class="ui-button secondary confirm-btn" @click="backToForm" :disabled="setupActionDisabled">
-                  {{ $i18n.back_to_edit }}
-                </button>
-                <button
-                  type="button"
-                  class="ui-button secondary confirm-btn"
-                  @click="regenerateCharacter"
-                  :disabled="setupActionDisabled"
-                  :aria-busy="setupBusyAction === 'regenerate'"
-                >
-                  <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
-                  <span v-else>{{ $i18n.regenerate_character }}</span>
-                </button>
+                <div class="confirm-actions__secondary-row" role="group" :aria-label="$i18n.confirm_secondary_actions_aria">
+                  <button type="button" class="ui-button secondary confirm-btn" @click="backToForm" :disabled="setupActionDisabled">
+                    {{ $i18n.back_to_edit }}
+                  </button>
+                  <button
+                    type="button"
+                    class="ui-button secondary confirm-btn"
+                    @click="regenerateCharacter"
+                    :disabled="setupActionDisabled"
+                    :aria-busy="setupBusyAction === 'regenerate'"
+                  >
+                    <span v-if="setupBusyAction === 'regenerate'" class="setup-submit-busy confirm-btn-busy">{{ $i18n.generating_character }}</span>
+                    <span v-else>{{ $i18n.regenerate_character }}</span>
+                  </button>
+                </div>
                 <button
                   type="button"
                   class="ui-button confirm-btn confirm-btn--primary"
@@ -114,45 +123,77 @@
         <!-- Game system selection removed; D&D 5e is the default -->
         <!-- Adventure setting removed; Classic Fantasy is used by default -->
         <!-- Language selection removed from setup; language is global via header -->
-        <div class="form-row">
-          <label for="character-gender" class="form-label">{{$i18n.character_gender}}</label>
-          <select id="character-gender" v-model="formData.gender" class="control" :aria-label="$i18n.character_gender">
-            <option value="Male">{{ $i18n.gender_male_short }}</option>
-            <option value="Female">{{ $i18n.gender_female_short }}</option>
-          </select>
+        <div
+          class="setup-form-fields"
+          :class="{ 'setup-form-fields--lobby-compact': lobbyInline }"
+        >
+        <div class="setup-form-row-group setup-form-row-group--2">
+          <div class="form-row">
+            <label for="character-name" class="form-label">{{$i18n.character_name}}</label>
+            <input id="character-name" class="control" v-model="formData.characterName" type="text" autocomplete="off" :placeholder="$i18n.character_name_placeholder" :aria-label="$i18n.character_name" />
+          </div>
+          <div class="form-row">
+            <label for="character-gender" class="form-label">{{$i18n.character_gender}}</label>
+            <select id="character-gender" v-model="formData.gender" class="control" :aria-label="$i18n.character_gender">
+              <option value="Male">{{ $i18n.gender_male_short }}</option>
+              <option value="Female">{{ $i18n.gender_female_short }}</option>
+            </select>
+          </div>
         </div>
 
-        <div class="form-row">
-          <label for="character-name" class="form-label">{{$i18n.character_name}}</label>
-          <input id="character-name" class="control" v-model="formData.characterName" type="text" autocomplete="off" :placeholder="$i18n.character_name_placeholder" :aria-label="$i18n.character_name" />
+        <div class="setup-form-row-group setup-form-row-group--2">
+          <div class="form-row">
+            <label for="character-race" class="form-label">{{$i18n.character_race}}</label>
+            <select id="character-race" class="control" v-model="formData.characterRace" :aria-label="$i18n.character_race" @change="onRaceChange">
+              <option v-for="r in availableRaces" :key="r.id" :value="r.id">{{ r.label }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="character-subrace" class="form-label">{{$i18n.subrace}}</label>
+            <select
+              v-if="hasSubraceOptions"
+              id="character-subrace"
+              class="control"
+              v-model="formData.subrace"
+              :aria-label="$i18n.subrace"
+            >
+              <option v-for="s in availableSubraces" :key="s.id" :value="s.id">{{ s.label }}</option>
+            </select>
+            <select v-else id="character-subrace" class="control" disabled :aria-label="$i18n.subrace">
+              <option value="">—</option>
+            </select>
+          </div>
         </div>
 
-        <div class="form-row">
-          <label for="character-race" class="form-label">{{$i18n.character_race}}</label>
-          <select id="character-race" class="control" v-model="formData.characterRace" :aria-label="$i18n.character_race" @change="onRaceChange">
-            <option v-for="r in availableRaces" :key="r.id" :value="r.id">{{ r.label }}</option>
-          </select>
+        <div class="setup-form-row-group setup-form-row-group--3">
+          <div class="form-row">
+            <label for="character-class" class="form-label">{{$i18n.character_class}}</label>
+            <select id="character-class" class="control" v-model="formData.characterClass" :aria-label="$i18n.character_class" @change="onClassChange">
+              <option v-for="c in availableClasses" :key="c.id" :value="c.id">{{ c.label }}</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="character-subclass" class="form-label">{{$i18n.subclass}}</label>
+            <select
+              v-if="hasSubclassOptions"
+              id="character-subclass"
+              class="control"
+              v-model="formData.subclass"
+              :aria-label="$i18n.subclass"
+            >
+              <option v-for="s in availableSubclasses" :key="s.id" :value="s.id">{{ s.label }}</option>
+            </select>
+            <select v-else id="character-subclass" class="control" disabled :aria-label="$i18n.subclass">
+              <option value="">—</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="character-level" class="form-label">{{$i18n.character_level}}</label>
+            <select id="character-level" class="control" v-model.number="formData.characterLevel" :aria-label="$i18n.character_level" @change="onLevelChange">
+              <option v-for="n in 20" :key="n" :value="n">{{ n }}</option>
+            </select>
+          </div>
         </div>
-
-        <div class="form-row">
-          <label for="character-class" class="form-label">{{$i18n.character_class}}</label>
-          <select id="character-class" class="control" v-model="formData.characterClass" :aria-label="$i18n.character_class">
-            <option v-for="c in availableClasses" :key="c.id" :value="c.id">{{ c.label }}</option>
-          </select>
-        </div>
-
-        <div class="form-row" v-if="availableSubclasses.length">
-          <label for="character-subclass" class="form-label">{{$i18n.subclass}}</label>
-          <select id="character-subclass" class="control" v-model="formData.subclass" :aria-label="$i18n.subclass">
-            <option v-for="s in availableSubclasses" :key="s.id" :value="s.id">{{ s.label }}</option>
-          </select>
-        </div>
-
-        <div class="form-row">
-          <label for="character-level" class="form-label">{{$i18n.character_level}}</label>
-          <select id="character-level" class="control" v-model.number="formData.characterLevel" :aria-label="$i18n.character_level">
-            <option v-for="n in 20" :key="n" :value="n">{{ n }}</option>
-          </select>
         </div>
         
         <div class="form-actions">
@@ -203,7 +244,7 @@
                 default: false,
             },
         },
-        emits: ['lobby-character-done'],
+        emits: ['lobby-character-done', 'lobby-inline-wizard-hold', 'lobby-inline-confirm-sheet'],
         data() {
             return {
                 setupPhase: 'form',
@@ -233,6 +274,7 @@
                     characterLevel: 1,
                     gender: 'Male',
                     subclass: 'random',
+                    subrace: 'random',
                 },
                 classes: [],
                 races: [],
@@ -291,6 +333,31 @@
             'wizard': 2,
             'artificer': 3
           };
+          /** PHB-style subraces by race id (ids align with $i18n.subrace_labels). */
+          this.subracesByRace = {
+            random: [],
+            human: [],
+            'half-elf': [],
+            'half-orc': [],
+            tiefling: [],
+            elf: [
+              { id: 'high_elf', label: 'High Elf' },
+              { id: 'wood_elf', label: 'Wood Elf' },
+              { id: 'drow', label: 'Drow' },
+            ],
+            dwarf: [
+              { id: 'hill_dwarf', label: 'Hill Dwarf' },
+              { id: 'mountain_dwarf', label: 'Mountain Dwarf' },
+            ],
+            halfling: [
+              { id: 'lightfoot', label: 'Lightfoot Halfling' },
+              { id: 'stout', label: 'Stout Halfling' },
+            ],
+            gnome: [
+              { id: 'forest_gnome', label: 'Forest Gnome' },
+              { id: 'rock_gnome', label: 'Rock Gnome' },
+            ],
+          };
           try {
             const j = sessionStorage.getItem(SESSION_JOIN_UI_GAME_ID);
             const gid = this.$store.state.gameId;
@@ -334,12 +401,35 @@
             availableSubclasses() {
               const labels = (this.$i18n && this.$i18n.subclass_labels) || {};
               const cmp = this.i18nListSortCollator;
-              const rows = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel).map((s) => ({
+              const raw = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel).map((s) => ({
                 id: s.id,
                 label: labels[s.id] || s.label,
                 minLevel: s.minLevel,
               }));
-              return [...rows].sort((a, b) => cmp.compare(a.label, b.label));
+              if (!raw.length) return [];
+              const randomLabel = (this.$i18n && this.$i18n.random) ? String(this.$i18n.random) : 'Random';
+              const rest = [...raw].sort((a, b) => cmp.compare(a.label, b.label));
+              return [{ id: 'random', label: randomLabel }, ...rest];
+            },
+            availableSubraces() {
+              const labels = (this.$i18n && this.$i18n.subrace_labels) || {};
+              const cmp = this.i18nListSortCollator;
+              const raw = this.getAvailableSubracesForRace(this.formData.characterRace).map((s) => ({
+                id: s.id,
+                label: labels[s.id] || s.label,
+              }));
+              if (!raw.length) return [];
+              const randomLabel = (this.$i18n && this.$i18n.random) ? String(this.$i18n.random) : 'Random';
+              const rest = [...raw].sort((a, b) => cmp.compare(a.label, b.label));
+              return [{ id: 'random', label: randomLabel }, ...rest];
+            },
+            /** True when the current race has PHB subrace options (row always shows; otherwise subrace select is disabled). */
+            hasSubraceOptions() {
+                return this.getAvailableSubracesForRace(this.formData.characterRace).length > 0;
+            },
+            /** True when class+level allow a subclass pick (row always shows; otherwise subclass select is disabled). */
+            hasSubclassOptions() {
+                return this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel).length > 0;
             },
             showFullProgressBanner() {
                 if (!this.progressMessage) return false;
@@ -446,6 +536,9 @@
             },
             characterReadyConfirmText() {
                 if (this.partyLateJoinInviteePlaying) return this.$i18n.character_ready_join_party_playing;
+                if (this.usePartyRoomConfirmUi && this.lobbyInline) {
+                    return this.$i18n.character_ready_party_room_roster_only;
+                }
                 if (this.usePartyRoomConfirmUi) return this.$i18n.character_ready_party_room;
                 return this.$i18n.character_ready_confirm;
             },
@@ -454,6 +547,22 @@
             },
         },
         watch: {
+            setupPhase() {
+                this.emitLobbyInlineConfirmSheet();
+            },
+            confirmSheetCharacter: {
+                deep: true,
+                handler() {
+                    this.emitLobbyInlineConfirmSheet();
+                },
+            },
+            lobbyInline(isLobby) {
+                if (!isLobby) {
+                    this.$emit('lobby-inline-confirm-sheet', null);
+                } else {
+                    this.emitLobbyInlineConfirmSheet();
+                }
+            },
             '$store.state.setupWizardResetTick'() {
                 this.resetWizardFromHeaderNew();
             },
@@ -512,14 +621,28 @@
             } else if (!this.joinGameIdFromRoute) {
                 this.tryRestoreSetupFromServer();
             }
+            this.emitLobbyInlineConfirmSheet();
         },
         beforeUnmount() {
+            if (this.lobbyInline) {
+                this.$emit('lobby-inline-wizard-hold', false);
+                this.$emit('lobby-inline-confirm-sheet', null);
+            }
             if (typeof this._unwatchGameId === 'function') {
                 this._unwatchGameId();
                 this._unwatchGameId = null;
             }
         },
         methods: {
+            /** Keeps ChatRoom roster in sync when `confirmSheetCharacter` is set (including mid-submit before `setupPhase` flips). */
+            emitLobbyInlineConfirmSheet() {
+                if (!this.lobbyInline) return;
+                const sheet =
+                    this.confirmSheetCharacter && typeof this.confirmSheetCharacter === 'object'
+                        ? this.confirmSheetCharacter
+                        : null;
+                this.$emit('lobby-inline-confirm-sheet', sheet);
+            },
             persistJoinUiGameId(gid) {
                 if (!gid) return;
                 const s = String(gid);
@@ -692,6 +815,16 @@
                     const subs = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel);
                     if (subs.some((s) => s.id === subRaw)) this.formData.subclass = subRaw;
                 }
+                const subraceRaw =
+                    (typeof pc.subrace === 'string' && pc.subrace.toLowerCase().trim()) ||
+                    (typeof pc.subraceId === 'string' && pc.subraceId.toLowerCase().trim()) ||
+                    '';
+                if (subraceRaw) {
+                    const norm = subraceRaw.replace(/-/g, '_').replace(/\s+/g, '_');
+                    const srs = this.getAvailableSubracesForRace(this.formData.characterRace);
+                    const match = srs.find((s) => s.id === norm || s.id === subraceRaw);
+                    if (match) this.formData.subrace = match.id;
+                }
             },
             /** Header "New game" while already on /setup: store resets but local phase/sheet must clear too. */
             resetWizardFromHeaderNew() {
@@ -715,6 +848,7 @@
                     characterLevel: 1,
                     gender: 'Male',
                     subclass: 'random',
+                    subrace: 'random',
                 };
                 this.clearSetupSessionGameId();
             },
@@ -727,6 +861,7 @@
                     characterLevel: 1,
                     gender: 'Male',
                     subclass: 'random',
+                    subrace: 'random',
                 };
             },
             applyViewerRoleFromLoadPayload(data) {
@@ -780,13 +915,9 @@
                         await this.$router.replace({ name: 'ChatRoomWithId', params: { id: gameId } });
                         return;
                     }
-                    // Clear before replace: navigation updates joinGameIdFromRoute and the watcher
-                    // runs initJoinFlow in the same tick; if busy stays true until finally(), initJoinFlow
-                    // bails once and never re-runs (joinGame id unchanged).
                     this.joinTokenConsumeBusy = false;
-                    await this.$router.replace({ path: '/setup', query: { joinGame: gameId } });
-                    await this.$nextTick();
-                    if (!this.joinMode) await this.initJoinFlow(gameId);
+                    await this.initJoinFlow(gameId);
+                    await this.$router.replace({ name: 'ChatRoomWithId', params: { id: gameId } });
                 } catch (e) {
                     const code = e.response && e.response.data && e.response.data.code;
                     this.joinFlowError =
@@ -805,6 +936,16 @@
             },
             async initJoinFlow(gid) {
                 if (!gid || this.joinInitBusy || this.joinTokenConsumeBusy) return;
+                /* Avoid duplicate load when invite flow already hydrated join state (e.g. ChatRoom remount). */
+                if (
+                    String(this.$store.state.gameId) === String(gid) &&
+                    this.joinMode === true &&
+                    this.setupViewerIsGameOwner === false &&
+                    this.$store.state.gameSetup &&
+                    typeof this.$store.state.gameSetup === 'object'
+                ) {
+                    return;
+                }
                 this.joinInitBusy = true;
                 this.joinFlowError = '';
                 this.joinMode = false;
@@ -1047,6 +1188,10 @@
                     }
                 }
             },
+            /**
+             * Persist generated/regenerated PC to Vuex, then release lobby wizard hold so ChatRoom matches
+             * “refresh with saved sheet”: embedded sheet + roster only (no duplicate SetupForm confirm panel).
+             */
             commitGameSetupWithCharacter(playerCharacter) {
                 let pc = playerCharacter;
                 try {
@@ -1070,6 +1215,9 @@
                 }
                 this.$store.commit('setGameSetup', base);
                 this.tryPersistSetupSessionGameId();
+                if (this.lobbyInline) {
+                    this.$emit('lobby-inline-wizard-hold', false);
+                }
             },
             isClassAllowed(classId) {
                 const raceId = this.formData.characterRace || 'random';
@@ -1081,6 +1229,18 @@
                 // If the currently selected class is not allowed for the new race, reset to 'random'
                 if (!this.isClassAllowed(this.formData.characterClass)) {
                     this.formData.characterClass = 'random';
+                }
+                this.formData.subclass = 'random';
+                this.formData.subrace = 'random';
+            },
+            onClassChange() {
+                this.formData.subclass = 'random';
+            },
+            onLevelChange() {
+                const subs = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel);
+                const ids = new Set(subs.map((s) => s.id));
+                if (this.formData.subclass && this.formData.subclass !== 'random' && !ids.has(this.formData.subclass)) {
+                    this.formData.subclass = 'random';
                 }
             },
             // Choose a random race id (excluding 'random' id)
@@ -1113,6 +1273,32 @@
                 const list = this.subclassesByClass[classId] || [];
                 return list;
             },
+            getAvailableSubracesForRace(raceId) {
+                if (!raceId || raceId === 'random') return [];
+                const list = this.subracesByRace[raceId] || [];
+                return list;
+            },
+            /** After race/class/level are fixed, pick concrete subclass and subrace when random or invalid. */
+            finalizeSubclassAndSubraceSelections() {
+                const subs = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel);
+                const subIds = new Set(subs.map((s) => s.id));
+                if (subs.length) {
+                    if (!this.formData.subclass || this.formData.subclass === 'random' || !subIds.has(this.formData.subclass)) {
+                        this.formData.subclass = subs[Math.floor(Math.random() * subs.length)].id;
+                    }
+                } else {
+                    this.formData.subclass = 'random';
+                }
+                const srList = this.getAvailableSubracesForRace(this.formData.characterRace);
+                const srIds = new Set(srList.map((s) => s.id));
+                if (srList.length) {
+                    if (!this.formData.subrace || this.formData.subrace === 'random' || !srIds.has(this.formData.subrace)) {
+                        this.formData.subrace = srList[Math.floor(Math.random() * srList.length)].id;
+                    }
+                } else {
+                    this.formData.subrace = 'random';
+                }
+            },
             // Resolve 'random' selections so final formData contains concrete ids respecting rules
             resolveRandomSelections() {
                 // If both race and class are random: pick race then class compatible with it
@@ -1122,9 +1308,7 @@
                     const cls = this.chooseRandomClassForRace(race);
                     this.formData.characterRace = race;
                     this.formData.characterClass = cls;
-                    // resolve subclass
-                    const subs = this.getAvailableSubclassesForClass(cls, this.formData.characterLevel);
-                    this.formData.subclass = subs.length ? subs[Math.floor(Math.random()*subs.length)].id : 'random';
+                    this.finalizeSubclassAndSubraceSelections();
                     return;
                 }
                 // If race is random but class is concrete: pick a race that allows that class
@@ -1136,22 +1320,17 @@
                         return allowed.includes(this.formData.characterClass);
                     }).filter(id => id !== 'random');
                     this.formData.characterRace = candidateRaces.length ? candidateRaces[Math.floor(Math.random() * candidateRaces.length)] : this.chooseRandomRace();
+                    this.finalizeSubclassAndSubraceSelections();
                     return;
                 }
                 // If class is random but race is concrete: pick a class allowed for that race
                 if (this.formData.characterClass === 'random' && this.formData.characterRace && this.formData.characterRace !== 'random') {
                     const cls = this.chooseRandomClassForRace(this.formData.characterRace);
                     this.formData.characterClass = cls;
-                    const subs = this.getAvailableSubclassesForClass(cls, this.formData.characterLevel);
-                    this.formData.subclass = subs.length ? subs[Math.floor(Math.random()*subs.length)].id : 'random';
+                    this.finalizeSubclassAndSubraceSelections();
                     return;
                 }
-                // If subclass is random or invalid, resolve now if possible
-                if (!this.formData.subclass || this.formData.subclass === 'random') {
-                    const subs = this.getAvailableSubclassesForClass(this.formData.characterClass, this.formData.characterLevel);
-                    this.formData.subclass = subs.length ? subs[Math.floor(Math.random()*subs.length)].id : 'random';
-                }
-                // otherwise both concrete — nothing to do
+                this.finalizeSubclassAndSubraceSelections();
             },
 
         /** World-only campaign core + stages; does not receive character data (server ignores it anyway). */
@@ -1210,25 +1389,65 @@
             return s;
         },
 
+        subraceForCharacterApi() {
+            const s = this.formData.subrace;
+            if (!s || s === 'random') return undefined;
+            return s;
+        },
+
         async generatePlayerCharacter(gameId = null) {
             const gid = gameId != null && String(gameId).trim() !== '' ? String(gameId).trim() : '';
+            const gameSetupPayload = {
+                name: this.normalizedNameForCharacterApi(),
+                gender: this.formData.gender,
+                class: this.formData.characterClass,
+                race: this.formData.characterRace,
+                level: this.formData.characterLevel,
+                subclass: this.subclassForCharacterApi(),
+                subrace: this.subraceForCharacterApi(),
+                background: this.formData.characterBackground,
+                language: this.$store.state.language,
+            };
+            const raceId = this.formData.characterRace;
+            const existingNameRaw = String(this.formData.characterName || '').trim();
+            const randomWord = String(this.$i18n.random || '').trim().toLowerCase();
+            const nameFieldEmptyOrRandom =
+                !existingNameRaw || existingNameRaw.toLowerCase() === randomWord;
+            if (raceId && raceId !== 'random' && nameFieldEmptyOrRandom) {
+                try {
+                    const previewBody = {
+                        gameSetup: gameSetupPayload,
+                        language: this.$store.state.language,
+                    };
+                    if (gid) {
+                        previewBody.gameId = gid;
+                    } else if (!this.isPartyJoinSetupContext()) {
+                        previewBody.newParty = true;
+                    }
+                    const prev = await axios.post('/api/game-session/preview-character-name', previewBody, {
+                        timeout: 20000,
+                    });
+                    const n = prev.data && prev.data.name != null && String(prev.data.name).trim();
+                    if (n) {
+                        this.formData.characterName = String(prev.data.name).trim();
+                        await this.$nextTick();
+                    }
+                } catch (prevErr) {
+                    /* optional: generation still runs; server will preassign if enabled */
+                }
+            }
             const body = {
-                gameSetup: {
-                    name: this.normalizedNameForCharacterApi(),
-                    gender: this.formData.gender,
-                    class: this.formData.characterClass,
-                    race: this.formData.characterRace,
-                    level: this.formData.characterLevel,
-                    subclass: this.subclassForCharacterApi(),
-                    background: this.formData.characterBackground,
-                    language: this.$store.state.language,
-                },
+                gameSetup: gameSetupPayload,
                 language: this.$store.state.language,
             };
             if (gid) {
                 body.gameId = gid;
             } else if (!this.isPartyJoinSetupContext()) {
                 body.newParty = true;
+            }
+            const preName = this.formData.characterName != null && String(this.formData.characterName).trim();
+            if (preName) {
+                body.preassignedDisplayName = preName;
             }
             const response = await axios.post('/api/game-session/generate-character', body, { timeout: 600000 });
             return response.data;
@@ -1294,6 +1513,9 @@
                 }
                 this.progressMessage = this.characterGenerationErrorMessage(e);
                 this.isStarting = false;
+                if (this.lobbyInline) {
+                    this.$emit('lobby-inline-wizard-hold', false);
+                }
                 setTimeout(() => {
                     this.progressMessage = '';
                 }, 5200);
@@ -1301,7 +1523,10 @@
             }
 
             this.setupPhase = 'confirm_character';
-            if (this.partyLateJoinInviteePlaying) {
+            /* Inline lobby: confirm-hint already explains next steps; avoid duplicating in .progress-message. */
+            if (this.lobbyInline) {
+                this.progressMessage = '';
+            } else if (this.partyLateJoinInviteePlaying) {
                 this.progressMessage = this.$i18n.character_ready_join_party_playing;
             } else if (this.usePartyRoomConfirmUi) {
                 this.progressMessage = this.$i18n.character_ready_party_room;
@@ -1321,6 +1546,9 @@
             delete gs.generatedCharacter;
             this.$store.commit('setGameSetup', gs);
             this.progressMessage = '';
+            if (this.lobbyInline) {
+                this.$emit('lobby-inline-wizard-hold', true);
+            }
         },
 
         async regenerateCharacter() {
@@ -1367,6 +1595,9 @@
                     );
                 }
                 this.progressMessage = this.characterGenerationErrorMessage(e);
+                if (this.lobbyInline) {
+                    this.$emit('lobby-inline-wizard-hold', false);
+                }
                 setTimeout(() => {
                     this.progressMessage = '';
                 }, 5200);
@@ -1458,7 +1689,41 @@
             }
         },
 
-        /** Party lobby: save sheet is already on server; mark ready, maybe start adventure, return to chat. */
+        /**
+         * Called from ChatRoom roster “Ready to start” for the viewer row. Runs the same flow as the old
+         * inline primary button: confirm step + party-ready (+ optional start). If the wizard is on the form
+         * phase but the sheet is already in Vuex, jumps to confirm first.
+         * @returns {Promise<boolean>} true if this component handled the flow (caller should not duplicate POST).
+         */
+        async runLobbyRosterConfirmAndReady() {
+            if (!this.lobbyInline || this.lobbyInteractionsLocked) return false;
+            if (this.isStarting) return false;
+            const uid = this.resolveViewerUserId();
+            if (!uid) return false;
+
+            if (this.setupPhase === 'confirm_character' && this.confirmSheetCharacter) {
+                await this.confirmPartyLobbyCharacter();
+                return true;
+            }
+
+            const fromMap = this.$store.state.gameSetup?.playerCharacters?.[uid];
+            if (!fromMap || typeof fromMap !== 'object') return false;
+            let clone;
+            try {
+                clone = JSON.parse(JSON.stringify(fromMap));
+            } catch (e) {
+                clone = { ...fromMap };
+            }
+            this.$emit('lobby-inline-wizard-hold', true);
+            this.confirmSheetCharacter = clone;
+            this.setupPhase = 'confirm_character';
+            await this.$nextTick();
+            this.characterPreviewKey += 1;
+            await this.confirmPartyLobbyCharacter();
+            return true;
+        },
+
+        /** Party lobby: one user action — POST party-ready (server requires a saved sheet), then optional start; return to chat. */
         async confirmPartyLobbyCharacter() {
             if (this.setupPhase !== 'confirm_character') return;
             if (!(await this.hydrateConfirmStepFromServer())) return;
@@ -1506,6 +1771,7 @@
                     this.$store.commit('setGameSetup', data.gameSetup);
                 }
                 const meta = data && data.partyReadyMeta;
+                let partyStartHardFail = false;
                 if (meta && meta.allMembersHaveSheets && meta.allMembersReady) {
                     this.lobbyConfirmBusyStep = 'adventure';
                     try {
@@ -1520,15 +1786,25 @@
                         ) {
                             /* benign race or lobby state; chat will reflect true state */
                         } else {
+                            partyStartHardFail = true;
                             const detail =
                                 startErr.response && startErr.response.data && startErr.response.data.error;
+                            const errCode =
+                                startErr.response && startErr.response.data && startErr.response.data.code;
+                            const suffix =
+                                errCode && String(errCode).trim()
+                                    ? ` (${String(errCode).trim()})`
+                                    : '';
                             this.progressMessage =
-                                detail || startErr.message || this.$i18n.error_saving_game;
+                                (detail || startErr.message || this.$i18n.error_saving_game) + suffix;
                             setTimeout(() => {
                                 this.progressMessage = '';
-                            }, 9000);
+                            }, 12000);
                         }
                     }
+                }
+                if (partyStartHardFail) {
+                    return;
                 }
                 this.clearSetupSessionGameId();
                 this.clearJoinUiGameId();
@@ -1764,19 +2040,36 @@
 .setup-page--confirm {
   max-width: min(96vw, 640px);
 }
-.setup-page--lobby-inline {
+/* Compound selectors beat `.setup-page { max-width: 520px }`; reset horizontal margin from `margin: 0 auto`. */
+.setup-page.setup-page--lobby-inline {
   max-width: 100%;
-  margin-top: 2px;
+  width: 100%;
+  margin: 2px 0 0;
+  padding-left: 0;
+  padding-right: 0;
 }
-.setup-page--lobby-inline :deep(.ui-panel) {
+.setup-page.setup-page--lobby-inline.setup-page--confirm {
   max-width: 100%;
 }
-.setup-page--lobby-inline .setup-form {
+.setup-page.setup-page--lobby-inline :deep(.ui-panel) {
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+.setup-page.setup-page--lobby-inline .setup-form {
   padding: 14px 12px;
   gap: 14px;
 }
+/* Party lobby: stacked row groups (name+gender / race+subrace / class+subclass+level). */
+.setup-page.setup-page--lobby-inline .setup-form-fields--lobby-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
 :deep(.ui-panel--setup-confirm) {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 .progress-message {
   margin-top: 14px;
@@ -1794,6 +2087,39 @@
   flex-direction: column;
   gap: 18px;
   padding: 18px 20px;
+}
+.setup-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.setup-form-row-group {
+  display: grid;
+  gap: 16px 20px;
+  align-items: start;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.setup-form-row-group--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.setup-form-row-group--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.setup-form-row-group .form-row {
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.setup-form-row-group .form-label {
+  width: auto;
+  padding-left: 0;
+}
+.setup-form-row-group .form-row .control {
+  min-width: 0;
+  width: 100%;
 }
 .form-row {
   display: flex;
@@ -1832,28 +2158,42 @@
   margin-bottom: 0;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 14px;
+  min-width: 0;
 }
 .confirm-hint {
-  margin: 0 0 12px;
+  margin: 0;
   color: rgba(230, 225, 216, 0.88);
   line-height: 1.45;
-  font-size: 0.95rem;
+  font-size: 0.92rem;
 }
 .confirm-actions {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  margin-top: 14px;
+  margin-top: 0;
+}
+.confirm-actions__secondary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.confirm-actions__secondary-row--single {
+  grid-template-columns: 1fr;
+}
+.confirm-actions__secondary-row .confirm-btn {
+  width: 100%;
+  min-width: 0;
 }
 .confirm-btn {
   width: 100%;
   justify-content: center;
   text-align: center;
   white-space: normal;
-  min-height: 48px;
-  padding: 0.65rem 1rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
   line-height: 1.3;
   box-sizing: border-box;
 }
@@ -1861,8 +2201,30 @@
   font-weight: 700;
 }
 .confirm-actions--join-party .confirm-btn--join-party {
-  font-size: 1.06rem;
-  min-height: 52px;
+  font-size: 1rem;
+  min-height: 46px;
+}
+/* Party lobby card: slightly denser confirm chrome so the parchment keeps more vertical room. */
+.setup-page.setup-page--lobby-inline.setup-page--confirm .confirm-hint {
+  font-size: 0.9rem;
+  line-height: 1.42;
+}
+.setup-page.setup-page--lobby-inline.setup-page--confirm .confirm-actions {
+  gap: 7px;
+}
+.setup-page.setup-page--lobby-inline.setup-page--confirm .confirm-btn {
+  min-height: 40px;
+  padding: 0.42rem 0.65rem;
+  font-size: 0.9rem;
+}
+.setup-page.setup-page--lobby-inline.setup-page--confirm .confirm-actions--join-party .confirm-btn--join-party {
+  min-height: 44px;
+  font-size: 0.96rem;
+}
+@media (max-width: 380px) {
+  .confirm-actions__secondary-row {
+    grid-template-columns: 1fr;
+  }
 }
 .ui-button.secondary {
   background: rgba(255, 255, 255, 0.06);

@@ -25,6 +25,22 @@ function characterDisplayNameFromSheet(c) {
   return n || null;
 }
 
+/**
+ * Write the same display string everywhere the client/server read a PC label (order matches characterDisplayNameFromSheet).
+ * Use after server-side name assignment (e.g. Iron Arachne) so identity.name does not override the new name.
+ * @param {object} pc
+ * @param {string} displayName
+ */
+function syncPlayerCharacterDisplayNameFields(pc, displayName) {
+  const full = displayName != null ? String(displayName).trim() : '';
+  if (!full || !pc || typeof pc !== 'object') return;
+  pc.name = full;
+  if (pc.identity && typeof pc.identity === 'object' && !Array.isArray(pc.identity)) {
+    pc.identity.name = full;
+  }
+  pc.characterName = full;
+}
+
 /** Label for prompts / party list when a fallback is required. */
 function displayNameFromCharacterSheet(c) {
   return characterDisplayNameFromSheet(c) || 'Adventurer';
@@ -84,6 +100,7 @@ function applyCoinageToUserCharacter(gameSetup, userIdStr, coinage) {
 module.exports = {
   characterForUser,
   characterDisplayNameFromSheet,
+  syncPlayerCharacterDisplayNameFields,
   displayNameFromCharacterSheet,
   characterDisplayNameForUser,
   mergePlayerCharacters,

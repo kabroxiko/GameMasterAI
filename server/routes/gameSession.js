@@ -2,7 +2,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { generateResponse, getLastGenerateFailureMessage } = require('../openai-api');
+const { generateResponse } = require('../openai-api');
 const {
   composeSystemMessages,
   loadPrompt,
@@ -37,8 +37,56 @@ const {
 } = require('../services/partyLobbyState');
 const { hasSubstantiveCampaignSpec } = require('../campaignSpecReady');
 const { characterForUser, displayNameFromCharacterSheet } = require('../playerCharacterHelpers');
+const {
+  parseModelStructuredObject,
+  parseCampaignStageModelOutput,
+} = require('../utils/llmStructuredParse');
+const {
+  stripBomAndInvisible,
+  stripLlmChannelNoise,
+  stripMarkdownCodeFence,
+  prepareWireFormatText,
+} = require('../utils/llmTextPrepare');
 
 const DEFAULT_MODEL = process.env.DM_OPENAI_MODEL || 'gpt-3.5-turbo';
+
+/**
+ * Timeout for Promise.race around the creativeSeed LLM call only.
+ * Default 120s — slow or reasoning-heavy models often exceed 60s; a timed-out race must not leave a late persist (see deferred persist after race).
+ * Override with DM_CREATIVE_SEED_TIMEOUT_MS (ms, min 10000) or DM_STAGE_TIMEOUT_MS.
+ */
+function resolveCreativeSeedRaceTimeoutMs() {
+  const own = process.env.DM_CREATIVE_SEED_TIMEOUT_MS;
+  if (own != null && String(own).trim()) {
+    const n = parseInt(String(own).trim(), 10);
+    if (Number.isFinite(n) && n >= 10000) return n;
+  }
+  const stage = process.env.DM_STAGE_TIMEOUT_MS;
+  if (stage != null && String(stage).trim()) {
+    const n = parseInt(String(stage).trim(), 10);
+    if (Number.isFinite(n) && n >= 10000) return n;
+  }
+  return 120000;
+}
+
+/**
+ * Per-stage timeout for lobby `start-party-adventure` pipeline (factions → majorNPCs → keyLocations → opening frame).
+ * Each stage runs sequentially with Promise.race; default 60s often fails on slow or reasoning models.
+ * Override: DM_LOBBY_STAGE_TIMEOUT_MS (ms, min 10000), else DM_STAGE_TIMEOUT_MS, else 120000.
+ */
+function resolveLobbyPipelineStageTimeoutMs() {
+  const own = process.env.DM_LOBBY_STAGE_TIMEOUT_MS;
+  if (own != null && String(own).trim()) {
+    const n = parseInt(String(own).trim(), 10);
+    if (Number.isFinite(n) && n >= 10000) return n;
+  }
+  const stage = process.env.DM_STAGE_TIMEOUT_MS;
+  if (stage != null && String(stage).trim()) {
+    const n = parseInt(String(stage).trim(), 10);
+    if (Number.isFinite(n) && n >= 10000) return n;
+  }
+  return 120000;
+}
 
 /** Avoid Node closing the socket while the proxy still waits (pair with proxy_read_timeout on nginx/openresty). */
 function setLongRequestSocketTimeout(req) {
@@ -157,8 +205,8 @@ function consolidateSystemMessages(msgs = [], options = {}) {
 }
 
 /**
- * JSON guards + session language only. Used for campaign pipeline stages so we do not inject
- * the full generator template (unreplaced Mustache / duplicate core policy) into system.
+ * Structured-output guard (YAML) + session language only. Used for campaign
+ * pipeline stages so we do not inject the full generator template into system.
  */
 function buildCampaignStageSystemMsgs(language) {
   const systemMsgs = [];
@@ -182,7 +230,7 @@ function buildCampaignStageSystemMsgs(language) {
 }
 
 /**
- * System stack for the campaign core JSON call after creativeSeed exists: guards, rendered
+ * System stack for the campaign core structured call after creativeSeed exists: guards, rendered
  * build slice (with real creativeSeedJson), language. Excludes generator userTemplate.
  */
 function buildCampaignCoreSystemMsgs(language, creativeSeedJson) {
@@ -260,126 +308,6 @@ function appendSceneGroundingPolicy(consolidated) {
 }
 
 /**
- * Extract the first top-level JSON object substring from a string by tracking balanced braces.
- * Returns the substring or null if not found.
- */
-function extractFirstJsonObject(text) {
-  if (!text || typeof text !== 'string') return null;
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (ch === '\\') {
-        escape = true;
-        continue;
-      }
-      if (ch === '"') {
-        inString = false;
-        continue;
-      }
-      continue;
-    } else {
-      if (ch === '"') {
-        inString = true;
-        continue;
-      }
-      if (ch === '{') {
-        depth++;
-        continue;
-      }
-      if (ch === '}') {
-        depth--;
-        if (depth === 0) {
-          return text.slice(start, i + 1);
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Models often omit the final `}` so the root `{ "playerCharacter": ... }` never closes; extractFirstJsonObject
- * then returns null. Append up to N closing braces and accept only when JSON.parse yields `playerCharacter`.
- * Log when extra braces were required (observable; not guessing from prose).
- */
-function tryParsePlayerCharacterWithBraceRepair(text) {
-  if (!text || typeof text !== 'string') return null;
-  const start = text.indexOf('{');
-  if (start === -1) return null;
-  const fromBrace = text.slice(start).trim();
-  const maxExtra = 12;
-  for (let extra = 0; extra <= maxExtra; extra++) {
-    const candidate = `${fromBrace}${'}'.repeat(extra)}`;
-    let o = null;
-    try {
-      o = JSON.parse(candidate);
-    } catch (_) {
-      o = jsonParseLenientObject(candidate);
-    }
-    if (o && typeof o === 'object' && o.playerCharacter && typeof o.playerCharacter === 'object') {
-      if (extra > 0) {
-        console.info(
-          'generate-character: model JSON required',
-          extra,
-          'extra closing brace(s); provider may omit the root `}` — enable JSON response mode on the API if available.'
-        );
-      }
-      return o;
-    }
-  }
-  return null;
-}
-
-/**
- * Normalize curly/smart quotes so JSON.parse succeeds when models use them as **delimiters**.
- * Do not apply this to valid JSON that already uses ASCII `"` for keys/strings: smart quotes **inside**
- * a string value (e.g. Spanish “…” in backstory) would become ASCII `"` and break JSON.parse.
- */
-function normalizeJsonLikeQuotes(s) {
-  if (!s || typeof s !== 'string') return s;
-  return s
-    .replace(/\u201c/g, '"')
-    .replace(/\u201d/g, '"')
-    .replace(/\u2018/g, "'")
-    .replace(/\u2019/g, "'");
-}
-
-/** Strip BOM / zero-width chars some APIs prepend. */
-function stripBomAndInvisible(s) {
-  if (!s || typeof s !== 'string') return s;
-  return s.replace(/^\uFEFF/, '').replace(/^[\u200B-\u200D\uFEFF]+/, '');
-}
-
-function jsonParseLenientObject(jsonStr) {
-  if (!jsonStr || typeof jsonStr !== 'string') return null;
-  const tryParse = (t) => {
-    try {
-      const o = JSON.parse(t);
-      return o && typeof o === 'object' && !Array.isArray(o) ? o : null;
-    } catch (e) {
-      return null;
-    }
-  };
-  let o = tryParse(jsonStr);
-  if (o) return o;
-  const trimmedTrailingComma = jsonStr.replace(/,\s*\}\s*$/, '}');
-  if (trimmedTrailingComma !== jsonStr) {
-    o = tryParse(trimmedTrailingComma);
-    if (o) return o;
-  }
-  return null;
-}
-
-/**
  * Coerce model "narration" field to a string (some models emit numbers, arrays of paragraphs, or {markdown}).
  * @returns {string|null} null if the key is missing or shape is unusable
  */
@@ -401,61 +329,29 @@ function narrationFromEnvelopeField(raw) {
 }
 
 /**
- * When the model starts a JSON envelope but truncates mid-string or omits closing braces, recover narration.
+ * When the model starts a YAML envelope but truncates (e.g. mid block scalar), recover narration from `narration: |`.
  * Persists dmInitialEnvelopeSalvagedAt for diagnostics (workspace policy).
  */
 function salvageTruncatedInitialEnvelope(raw, gameId) {
-  const s = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownJsonFence(String(raw || '')))).trim();
+  const s = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownCodeFence(String(raw || '')))).trim();
   if (!s || s.length < 12) return null;
-  const m = s.match(/"narration"\s*:\s*"/);
-  if (!m) return null;
-  const start = m.index + m[0].length;
-  let i = start;
-  let out = '';
-  while (i < s.length) {
-    const ch = s[i];
-    if (ch === '\\' && i + 1 < s.length) {
-      const n = s[i + 1];
-      if (n === 'n') {
-        out += '\n';
-        i += 2;
-        continue;
-      }
-      if (n === 't') {
-        out += '\t';
-        i += 2;
-        continue;
-      }
-      if (n === 'r') {
-        out += '\r';
-        i += 2;
-        continue;
-      }
-      if (n === '"' || n === '\\' || n === '/') {
-        out += n;
-        i += 2;
-        continue;
-      }
-      if (n === 'u' && i + 5 < s.length) {
-        const hex = s.slice(i + 2, i + 6);
-        if (/^[0-9a-fA-F]{4}$/.test(hex)) {
-          out += String.fromCharCode(parseInt(hex, 16));
-          i += 6;
-          continue;
-        }
-      }
-      out += n;
-      i += 2;
-      continue;
-    }
-    if (ch === '"') break;
-    out += ch;
-    i++;
+  const blockMatch = s.match(/\bnarration:\s*[>|](?:[+-])?\s*\r?\n([\s\S]+)/i);
+  if (!blockMatch) return null;
+  let body = blockMatch[1];
+  const stopAtSibling = body.match(
+    /^([\s\S]*?)(?=\n(?:imminentCombat|combatCue|encounterState|coinage)\s*:[^\n]*(?:\r?\n|$))/i
+  );
+  if (stopAtSibling) body = stopAtSibling[1];
+  else {
+    const lines = body.split(/\r?\n/);
+    const reTopKey = /^[a-zA-Z_][\w]*\s*:/;
+    const cut = lines.findIndex((line, idx) => idx > 0 && reTopKey.test(line) && !/^\s/.test(line));
+    if (cut !== -1) body = lines.slice(0, cut).join('\n');
   }
-  const narration = out.trim();
+  const narration = body.trim();
   if (narration.length < 8) return null;
   console.warn(
-    '[DM] Initial opening: salvaged narration from truncated/partial envelope JSON.',
+    '[DM] Initial opening: salvaged narration from truncated/partial envelope YAML.',
     JSON.stringify({ gameId: gameId || null, length: narration.length, preview: narration.slice(0, 120) })
   );
   try {
@@ -529,11 +425,9 @@ function coerceCampaignStageToArray(stage, parsed) {
   if (parsed == null) return [];
   let p = parsed;
   if (typeof p === 'string') {
-    try {
-      p = JSON.parse(p);
-    } catch (e) {
-      return [];
-    }
+    const stageTry = parseCampaignStageModelOutput(p);
+    if (!stageTry.ok) return [];
+    p = stageTry.data;
   }
   if (Array.isArray(p)) return p.filter((x) => x != null);
   if (typeof p !== 'object') return [];
@@ -595,7 +489,7 @@ function coerceCampaignStageToArray(stage, parsed) {
   return [];
 }
 
-/** Ensure campaign core JSON has player-facing `title`; model may omit — synthesize from campaignConcept and log. */
+/** Ensure campaign core object has player-facing `title`; model may omit — synthesize from campaignConcept and log. */
 function ensureCampaignCoreTitle(core) {
   if (!core || typeof core !== 'object') return core;
   const raw = core.title;
@@ -610,43 +504,17 @@ function ensureCampaignCoreTitle(core) {
     const chunk = (m ? m[0] : cc).trim();
     fallback = chunk.slice(0, 100) || cc.slice(0, 80);
   }
-  console.warn('Campaign core JSON missing non-empty title; using fallback.', { fallback: fallback.slice(0, 100) });
+  console.warn('Campaign core missing non-empty title; using fallback.', { fallback: fallback.slice(0, 100) });
   core.title = fallback;
   return core;
-}
-
-function stripMarkdownJsonFence(s) {
-  if (!s || typeof s !== 'string') return s;
-  let t = s.trim();
-  if (/^```/.test(t)) {
-    t = t.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-  }
-  return t;
-}
-
-/** Some local models prefix JSON with <|message|> or similar; strip so extractFirstJsonObject finds the envelope. */
-function stripLlmChannelNoise(s) {
-  if (!s || typeof s !== 'string') return s;
-  let t = s.trim();
-  const msgIdx = t.search(/<\|message\|\>\s*/i);
-  if (msgIdx !== -1) {
-    t = t.slice(msgIdx).replace(/^<\|message\|\>\s*/i, '').trim();
-  }
-  t = t.replace(/^<\|channel\|\>[^\n]*\n?/gi, '').trim();
-  return t;
 }
 
 /** Player-visible text is envelope.narration; imminentCombat never sent to client. */
 function parseDmPlayerEnvelope(raw) {
   if (raw == null) return null;
-  let s = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownJsonFence(String(raw))));
-  s = normalizeJsonLikeQuotes(s);
-  const extracted = extractFirstJsonObject(s);
-  const trimmed = s.trim();
-  const jsonStr = extracted || (trimmed.startsWith('{') ? trimmed : null);
-  if (!jsonStr) return null;
-  const obj = jsonParseLenientObject(jsonStr);
-  if (!obj) return null;
+  const structured = parseModelStructuredObject(raw);
+  if (!structured.ok) return null;
+  const obj = structured.obj;
   const narration = narrationFromEnvelopeField(obj.narration);
   if (narration === null) return null;
   let encounterState = null;
@@ -666,16 +534,17 @@ function parseDmPlayerEnvelope(raw) {
 }
 
 /**
- * Some models (especially local) return markdown prose for the opening scene instead of DM envelope JSON.
+ * Some models (especially local) return markdown prose for the opening scene instead of the DM envelope.
  * Only stackMode === 'initial': wrap as narration and persist a diagnostic timestamp (see GameState.dmInitialEnvelopeCoercedAt).
  */
 function coerceInitialProseToEnvelope(raw, stackMode, gameId) {
   if (stackMode !== 'initial') return null;
-  const s = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownJsonFence(String(raw || '')))).trim();
+  const s = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownCodeFence(String(raw || '')))).trim();
   if (s.length < 24) return null;
   if (/^\s*[\[{]/.test(s)) return null;
+  if (/^\s*narration\s*:/i.test(s)) return null;
   console.warn(
-    '[DM] Initial opening: non-JSON prose coerced into envelope.narration.',
+    '[DM] Initial opening: non-envelope prose coerced into envelope.narration.',
     JSON.stringify({ gameId: gameId || null, length: s.length, preview: s.slice(0, 140) })
   );
   try {
@@ -1631,17 +1500,17 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
       }
     }
 
-    const stageTimeoutMsLegacy = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+    const creativeSeedRaceMsLegacy = resolveCreativeSeedRaceTimeoutMs();
     let seedDrawLegacy;
     try {
       const seedPromise = generateCampaignCreativeSeedStage({
         gameId: gameIdForCampaign,
         language,
         hostPremise: hostPremiseLegacy,
-        persist: Boolean(gameIdForCampaign),
+        persist: false,
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsLegacy)
+        setTimeout(() => reject(new Error('stage_timeout')), creativeSeedRaceMsLegacy)
       );
       seedDrawLegacy = await Promise.race([seedPromise, timeoutPromise]);
     } catch (err) {
@@ -1653,6 +1522,21 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
         error: 'Failed generating campaign creative-seed stage',
         code: seedDrawLegacy.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
       });
+    }
+    if (gameIdForCampaign) {
+      try {
+        await persistCreativeSeedToGameState(
+          gameIdForCampaign,
+          seedDrawLegacy.seed,
+          seedDrawLegacy.rawModelOutput
+        );
+      } catch (e) {
+        console.error('creativeSeed persist after race failed (generate-campaign):', e);
+        return res.status(500).json({
+          error: 'Failed persisting campaign creative-seed stage',
+          code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PERSIST',
+        });
+      }
     }
     const creativeSeedJsonLegacy = JSON.stringify(seedDrawLegacy.seed).slice(0, 8000);
 
@@ -1710,17 +1594,17 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
           console.log('DEBUG: raw AI response (generate-campaign) - could not stringify', e);
         }
 
-        // Try to parse JSON from the response; extract first balanced JSON object then parse; if it fails, do not retry (avoid token waste)
+        // Parse YAML-first structured reply (JSON still accepted); do not retry the model on parse failure.
         let parsed = null;
-        let rawJsonText = null;
-        try {
-            // Extract first balanced JSON object substring to avoid trailing non-JSON text
-            rawJsonText = extractFirstJsonObject(aiMessage) || aiMessage;
-            parsed = JSON.parse(rawJsonText);
-        } catch (e) {
-            console.warn('Failed to parse JSON from campaign generator (first attempt):', e, 'raw snippet:', rawJsonText ? rawJsonText.slice(0, 2000) : 'none');
-            // Do not call the model again to "repair" — avoid wasting tokens.
-            // Leave parsed as null; rawModelOutput will be saved for inspection.
+        const structuredCamp = parseModelStructuredObject(aiMessage);
+        if (structuredCamp.ok) {
+          parsed = structuredCamp.obj;
+        } else {
+          const rawSnippet = prepareWireFormatText(String(aiMessage || '')).slice(0, 2000);
+          console.warn(
+            'Failed to parse structured campaign generator reply (YAML). raw snippet:',
+            rawSnippet || 'none'
+          );
         }
 
         if (parsed) ensureCampaignCoreTitle(parsed);
@@ -1753,7 +1637,7 @@ router.post('/generate-campaign', requireAuth, async (req, res) => {
           console.warn('Failed to persist campaignSpec/rawModelOutput to GameState:', e);
         }
 
-        // Return parsed campaign JSON (campaignConcept) or raw AI output (strip DM-only fields for clients)
+        // Return parsed campaign spec or raw AI output (strip DM-only fields for clients)
         res.json(parsed ? redactCampaignSpecForClient(parsed) : aiMessage);
     } catch (error) {
         console.error('Error generating text:', error);
@@ -1782,17 +1666,17 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
 
   const hostPremiseTrimCore =
     hostPremiseBody && String(hostPremiseBody).trim() ? String(hostPremiseBody).trim().slice(0, 2000) : '';
-  const stageTimeoutMsCore = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+  const creativeSeedRaceMsCore = resolveCreativeSeedRaceTimeoutMs();
   let seedDrawCore;
   try {
     const seedPromise = generateCampaignCreativeSeedStage({
       gameId,
       language,
       hostPremise: hostPremiseTrimCore,
-      persist: Boolean(gameId),
+      persist: false,
     });
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsCore)
+      setTimeout(() => reject(new Error('stage_timeout')), creativeSeedRaceMsCore)
     );
     seedDrawCore = await Promise.race([seedPromise, timeoutPromise]);
   } catch (err) {
@@ -1804,6 +1688,17 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
       error: 'Failed generating campaign creative-seed stage',
       code: seedDrawCore.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
     });
+  }
+  if (gameId) {
+    try {
+      await persistCreativeSeedToGameState(gameId, seedDrawCore.seed, seedDrawCore.rawModelOutput);
+    } catch (e) {
+      console.error('creativeSeed persist after race failed (campaign-core):', e);
+      return res.status(500).json({
+        error: 'Failed persisting campaign creative-seed stage',
+        code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PERSIST',
+      });
+    }
   }
   const creativeSeedJsonCore = JSON.stringify(seedDrawCore.seed).slice(0, 8000);
 
@@ -1825,7 +1720,7 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
   const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPromptRendered }];
   const coreOutbound = traceMessages(
     messagesToSend,
-    'campaign core JSON only; JSON guards; language policy; world premise policy; DM core slice; user: campaign template request'
+    'campaign core YAML; structured-output guards; language policy; world premise policy; DM core slice; user: campaign template request'
   );
   // Log the exact messages being sent to the model for debugging (redactable if needed).
   try {
@@ -1845,21 +1740,22 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
       console.warn('Failed saving rawModelRequest for campaign-core:', e);
     }
 
-    const aiMessage = await generateResponse({ messages: coreOutbound }, { max_tokens: 1000, temperature: 0.8, gameId });
+    const campaignCoreFailureRef = { message: '' };
+    const aiMessage = await generateResponse(
+      { messages: coreOutbound },
+      { max_tokens: 1000, temperature: 0.8, gameId, failureMessageRef: campaignCoreFailureRef }
+    );
     if (!aiMessage) {
-      const detail = getLastGenerateFailureMessage();
+      const detail = campaignCoreFailureRef.message;
       return res.status(500).json({
         error: 'AI response empty',
         ...(detail ? { detail } : {}),
       });
     }
 
-    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
-    let parsed = null;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch (e) {
-      // persist raw for debugging if gameId
+    const structuredCore = parseModelStructuredObject(aiMessage);
+    const parsed = structuredCore.ok ? structuredCore.obj : null;
+    if (!parsed) {
       if (gameId) {
         try {
           const GameState = require('../models/GameState');
@@ -1868,7 +1764,7 @@ router.post('/generate-campaign-core', requireAuth, async (req, res) => {
           console.warn('Failed saving rawModelOutput:', ee);
         }
       }
-      return res.status(500).json({ error: 'Failed to parse campaign core JSON', raw: aiMessage });
+      return res.status(500).json({ error: 'Failed to parse campaign core (YAML)', raw: aiMessage });
     }
 
     ensureCampaignCoreTitle(parsed);
@@ -2023,15 +1919,15 @@ async function generateCampaignStage({ gameId, stage, campaignCore, language }) 
         if (stage === 'factions') {
           userPrompt =
             `Based on this campaignConcept: ${ccFallback}\n` +
-            `Return ONLY a JSON array named "factions" where each item has: name (string), goal (1-2 sentences), resources (1 sentence), currentDisposition (1 sentence). Return the array (not wrapped) as JSON.`;
+            `Return ONLY YAML: a mapping with key factions (list of objects) or a bare list of faction objects — each item: name (string), goal (1-2 sentences), resources (1 sentence), currentDisposition (1 sentence).`;
         } else if (stage === 'majorNPCs') {
           userPrompt =
             `Based on this campaignConcept: ${ccFallback}\n` +
-            `Return ONLY a JSON array named "majorNPCs" where each item has: name (string), role (string), briefDescription (2 sentences). Return the array as JSON.`;
+            `Return ONLY YAML: majorNPCs list or bare list — each item: name (string), role (string), briefDescription (2 sentences).`;
         } else if (stage === 'keyLocations') {
           userPrompt =
             `Based on this campaignConcept: ${ccFallback}\n` +
-            `Return ONLY a JSON array named "keyLocations" where each item has: name (string), type (string), significance (1-2 sentences). Return the array as JSON.`;
+            `Return ONLY YAML: keyLocations list or bare list — each item: name (string), type (string), significance (1-2 sentences).`;
         }
       }
     } catch (e) {
@@ -2043,10 +1939,10 @@ async function generateCampaignStage({ gameId, stage, campaignCore, language }) 
     const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
     const stageTrace =
       stage === 'factions'
-        ? 'campaign build stage: factions JSON; minimal guards + language system stack'
+        ? 'campaign build stage: factions YAML; minimal guards + language system stack'
         : stage === 'majorNPCs'
-          ? 'campaign build stage: major NPCs JSON; minimal guards + language system stack'
-          : 'campaign build stage: key locations JSON; minimal guards + language system stack';
+          ? 'campaign build stage: major NPCs YAML; minimal guards + language system stack'
+          : 'campaign build stage: key locations YAML; minimal guards + language system stack';
     const stageOutbound = traceMessages(messagesToSend, stageTrace);
     // Log the exact messages being sent to the model for debugging (redactable if needed).
     try {
@@ -2060,12 +1956,11 @@ async function generateCampaignStage({ gameId, stage, campaignCore, language }) 
       return false;
     }
 
-    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
+    const stageParsed = parseCampaignStageModelOutput(aiMessage);
     let parsed = null;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch (e) {
-      console.warn(`Failed to parse JSON for stage ${stage}:`, e);
+    if (stageParsed.ok) parsed = stageParsed.data;
+    if (!parsed) {
+      console.warn(`Failed to parse structured payload for stage ${stage} (YAML array or mapping expected)`);
       // persist raw for debugging
       try {
         await require('../models/GameState').findOneAndUpdate(
@@ -2085,7 +1980,7 @@ async function generateCampaignStage({ gameId, stage, campaignCore, language }) 
       coerced = dedupeMajorNpcNamesBySuffix(coerced);
     }
     if (!coerced.length) {
-      console.warn(`Stage ${stage}: empty array after coercion; raw snippet:`, String(rawJson).slice(0, 400));
+      console.warn(`Stage ${stage}: empty array after coercion; raw snippet:`, String(aiMessage).slice(0, 400));
       try {
         await require('../models/GameState').findOneAndUpdate(
           { gameId },
@@ -2138,9 +2033,39 @@ function normalizeCreativeSeed(raw) {
 }
 
 /**
+ * Writes creativeSeed + raw model text. Call only after a successful creative-seed generation (e.g. after Promise.race wins on the seed promise).
+ * @param {string} gameId
+ * @param {object} seed normalized creative seed object
+ * @param {string} [rawModelOutput]
+ */
+async function persistCreativeSeedToGameState(gameId, seed, rawModelOutput) {
+  const gid = gameId != null ? String(gameId).trim() : '';
+  if (!gid || !seed || typeof seed !== 'object') {
+    throw new Error('persistCreativeSeedToGameState: missing gameId or seed');
+  }
+  const GameState = require('../models/GameState');
+  const updated = await GameState.findOneAndUpdate(
+    { gameId: gid },
+    {
+      $set: {
+        'campaignSpec.creativeSeed': seed,
+        rawModelOutput: String(rawModelOutput || '').slice(0, 200000),
+      },
+    },
+    { upsert: false, new: true }
+  );
+  if (!updated) {
+    throw new Error(`persistCreativeSeedToGameState: no GameState row for gameId=${gid}`);
+  }
+  console.log(`Persisted campaignSpec.creativeSeed for gameId=${gid}`);
+}
+
+/**
  * Before campaign core: model draws a one-off creative steer; optional persist to campaignSpec.creativeSeed (DM-only).
+ * When this call is wrapped in Promise.race with a timeout, use persist:false and call persistCreativeSeedToGameState after the race succeeds
+ * so a late LLM finish does not write the DB after the server already treated the stage as timed out.
  * Uses a minimal system stack (JSON guards + language), not the full generator template.
- * @returns {Promise<{ ok: true, seed: object } | { ok: false, code?: string }>}
+ * @returns {Promise<{ ok: true, seed: object, rawModelOutput: string } | { ok: false, code?: string }>}
  */
 async function generateCampaignCreativeSeedStage({ gameId, language, hostPremise, persist }) {
   try {
@@ -2157,7 +2082,7 @@ async function generateCampaignCreativeSeedStage({ gameId, language, hostPremise
     });
     const consolidated = consolidateSystemMessages(buildCampaignStageSystemMsgs(language));
     const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
-    const outbound = traceMessages(messagesToSend, 'campaign build stage: creativeSeed JSON object');
+    const outbound = traceMessages(messagesToSend, 'campaign build stage: creativeSeed YAML object');
     try {
       console.log('OUTGOING (stage:creativeSeed) messagesToSend:', JSON.stringify(outbound, null, 2));
     } catch (e) {
@@ -2171,12 +2096,10 @@ async function generateCampaignCreativeSeedStage({ gameId, language, hostPremise
       console.warn('creativeSeed stage: empty model response');
       return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_EMPTY' };
     }
-    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
-    let parsedObj = null;
-    try {
-      parsedObj = JSON.parse(rawJson);
-    } catch (e) {
-      console.warn('creativeSeed stage: JSON.parse failed:', e);
+    const structuredSeed = parseModelStructuredObject(aiMessage);
+    const parsedObj = structuredSeed.ok ? structuredSeed.obj : null;
+    if (!parsedObj) {
+      console.warn('creativeSeed stage: structured parse failed (YAML)');
       if (persist && gameId) {
         try {
           const GameState = require('../models/GameState');
@@ -2212,26 +2135,16 @@ async function generateCampaignCreativeSeedStage({ gameId, language, hostPremise
       }
       return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_INVALID' };
     }
+    const rawModelOutput = String(aiMessage).slice(0, 200000);
     if (persist && gameId) {
       try {
-        const GameState = require('../models/GameState');
-        await GameState.findOneAndUpdate(
-          { gameId },
-          {
-            $set: {
-              'campaignSpec.creativeSeed': seed,
-              rawModelOutput: String(aiMessage).slice(0, 200000),
-            },
-          },
-          { upsert: false, new: true }
-        );
-        console.log(`Persisted campaignSpec.creativeSeed for gameId=${gameId}`);
+        await persistCreativeSeedToGameState(gameId, seed, rawModelOutput);
       } catch (e) {
         console.warn('Failed persisting creativeSeed stage:', e);
         return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PERSIST' };
       }
     }
-    return { ok: true, seed };
+    return { ok: true, seed, rawModelOutput };
   } catch (e) {
     console.error('generateCampaignCreativeSeedStage failed:', e);
     return { ok: false, code: 'CAMPAIGN_STAGE_CREATIVE_SEED_EXCEPTION' };
@@ -2284,7 +2197,7 @@ async function generateCampaignOpeningFrameStage({ gameId, language }) {
     });
     const consolidated = consolidateSystemMessages(buildCampaignStageSystemMsgs(language));
     const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPrompt }];
-    const outbound = traceMessages(messagesToSend, 'campaign build stage: openingSceneFrame JSON object');
+    const outbound = traceMessages(messagesToSend, 'campaign build stage: openingSceneFrame YAML object');
     try {
       console.log('OUTGOING (stage:openingSceneFrame) messagesToSend:', JSON.stringify(outbound, null, 2));
     } catch (e) {
@@ -2292,18 +2205,16 @@ async function generateCampaignOpeningFrameStage({ gameId, language }) {
     }
     const aiMessage = await generateResponse(
       { messages: outbound },
-      { max_tokens: 700, temperature: 0.92, gameId }
+      { max_tokens: 900, temperature: 0.92, gameId }
     );
     if (!aiMessage) {
       console.warn('openingSceneFrame stage: empty model response');
       return false;
     }
-    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
-    let parsedObj = null;
-    try {
-      parsedObj = JSON.parse(rawJson);
-    } catch (e) {
-      console.warn('openingSceneFrame stage: JSON.parse failed:', e);
+    const structuredOpening = parseModelStructuredObject(aiMessage);
+    const parsedObj = structuredOpening.ok ? structuredOpening.obj : null;
+    if (!parsedObj) {
+      console.warn('openingSceneFrame stage: structured parse failed (YAML)');
       try {
         await GameState.findOneAndUpdate(
           { gameId },
@@ -2384,17 +2295,17 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
     };
   }
 
-  const stageTimeoutMsEarly = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+  const creativeSeedRaceMsLobby = resolveCreativeSeedRaceTimeoutMs();
   let seedDrawLobby;
   try {
     const seedPromise = generateCampaignCreativeSeedStage({
       gameId,
       language,
       hostPremise: hostPremiseTrim,
-      persist: true,
+      persist: false,
     });
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('stage_timeout')), stageTimeoutMsEarly)
+      setTimeout(() => reject(new Error('stage_timeout')), creativeSeedRaceMsLobby)
     );
     seedDrawLobby = await Promise.race([seedPromise, timeoutPromise]);
   } catch (err) {
@@ -2407,6 +2318,17 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
       status: 500,
       error: 'Failed generating campaign creative-seed stage',
       code: seedDrawLobby.code || 'CAMPAIGN_STAGE_CREATIVE_SEED',
+    };
+  }
+  try {
+    await persistCreativeSeedToGameState(gameId, seedDrawLobby.seed, seedDrawLobby.rawModelOutput);
+  } catch (e) {
+    console.error('creativeSeed persist after race failed (lobby):', e);
+    return {
+      ok: false,
+      status: 500,
+      error: 'Failed persisting campaign creative-seed stage',
+      code: 'CAMPAIGN_STAGE_CREATIVE_SEED_PERSIST',
     };
   }
   const creativeSeedJsonLobby = JSON.stringify(seedDrawLobby.seed).slice(0, 8000);
@@ -2435,7 +2357,7 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
   const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userPromptRendered }];
   const coreOutbound = traceMessages(
     messagesToSend,
-    'lobby party start: campaign core JSON; optional hostPremise in user slice'
+    'lobby party start: campaign core YAML; optional hostPremise in user slice'
   );
 
   try {
@@ -2450,9 +2372,13 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
       console.warn('Failed saving rawModelRequest for lobby campaign-core:', e);
     }
 
-    const aiMessage = await generateResponse({ messages: coreOutbound }, { max_tokens: 1000, temperature: 0.8, gameId });
+    const lobbyCoreFailureRef = { message: '' };
+    const aiMessage = await generateResponse(
+      { messages: coreOutbound },
+      { max_tokens: 1000, temperature: 0.8, gameId, failureMessageRef: lobbyCoreFailureRef }
+    );
     if (!aiMessage) {
-      const detail = getLastGenerateFailureMessage();
+      const detail = lobbyCoreFailureRef.message;
       return {
         ok: false,
         status: 500,
@@ -2462,11 +2388,9 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
       };
     }
 
-    const rawJson = extractFirstJsonObject(aiMessage) || aiMessage;
-    let parsed = null;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch (e) {
+    const structuredLobby = parseModelStructuredObject(aiMessage);
+    const parsed = structuredLobby.ok ? structuredLobby.obj : null;
+    if (!parsed) {
       try {
         const GameState = require('../models/GameState');
         await GameState.findOneAndUpdate(
@@ -2480,7 +2404,7 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
       return {
         ok: false,
         status: 500,
-        error: 'Failed to parse campaign core JSON',
+        error: 'Failed to parse campaign core (YAML)',
         code: 'CAMPAIGN_CORE_PARSE',
         raw: String(aiMessage).slice(0, 4000),
       };
@@ -2488,7 +2412,7 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
 
     ensureCampaignCoreTitle(parsed);
 
-    const STAGE_TIMEOUT = process.env.DM_STAGE_TIMEOUT_MS ? parseInt(process.env.DM_STAGE_TIMEOUT_MS, 10) : 60000;
+    const lobbyStageTimeoutMs = resolveLobbyPipelineStageTimeoutMs();
     async function runStageWithTimeout(stageName) {
       try {
         const stagePromise = generateCampaignStage({
@@ -2498,11 +2422,11 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
           language,
         });
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('stage_timeout')), STAGE_TIMEOUT)
+          setTimeout(() => reject(new Error('stage_timeout')), lobbyStageTimeoutMs)
         );
         return await Promise.race([stagePromise, timeoutPromise]);
       } catch (err) {
-        console.error(`Stage ${stageName} failed or timed out:`, err);
+        console.error(`Stage ${stageName} failed or timed out (lobby, limitMs=${lobbyStageTimeoutMs}):`, err);
         return false;
       }
     }
@@ -2524,11 +2448,11 @@ async function runLobbyCampaignCoreWithStages({ gameId, language, hostPremise, a
       try {
         const p = generateCampaignOpeningFrameStage({ gameId, language });
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('stage_timeout')), STAGE_TIMEOUT)
+          setTimeout(() => reject(new Error('stage_timeout')), lobbyStageTimeoutMs)
         );
         return await Promise.race([p, timeoutPromise]);
       } catch (err) {
-        console.error('openingSceneFrame stage failed or timed out:', err);
+        console.error(`openingSceneFrame stage failed or timed out (lobby, limitMs=${lobbyStageTimeoutMs}):`, err);
         return false;
       }
     }
@@ -2613,6 +2537,62 @@ function allocateNewPartyGameId() {
   return `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`;
 }
 
+/** Fast MUNA draw for lobby UI: show name in the form while /generate-character runs. */
+router.post('/preview-character-name', requireAuth, async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const gameIdRaw = body.gameId;
+  const gameId =
+    gameIdRaw != null && String(gameIdRaw).trim() !== '' ? String(gameIdRaw).trim() : null;
+  const wantsNewParty = body.newParty === true || body.newParty === 'true';
+  if (!gameId && !wantsNewParty) {
+    return res.status(400).json({
+      error:
+        'This request needs a gameId (join an existing party) or newParty: true (start a brand-new party on the server).',
+      code: 'GAME_ID_OR_NEW_PARTY_REQUIRED',
+    });
+  }
+  const uidStr = req.userId;
+  const GameState0 = require('../models/GameState');
+  let gameRow = null;
+  try {
+    if (gameId) {
+      gameRow = await GameState0.findOne({ gameId })
+        .select('ownerUserId memberUserIds gameSetup campaignSpec encounterState')
+        .lean();
+      try {
+        await assertGameMember(uidStr, gameId);
+      } catch (e) {
+        return sendAccessError(res, e);
+      }
+    }
+  } catch (e) {
+    console.warn('preview-character-name: pre-check failed:', e);
+    return res.status(500).json({ error: 'Could not verify game access.' });
+  }
+  const gameSetup = body.gameSetup && typeof body.gameSetup === 'object' && !Array.isArray(body.gameSetup) ? body.gameSetup : {};
+  try {
+    const { ironArachneNamesEnabled, tryPreassignIronArachneDisplayName } = require('../services/ironArachneNames');
+    if (!ironArachneNamesEnabled()) {
+      return res.json({ name: null, code: 'IRON_NAMES_DISABLED' });
+    }
+    const pr = await tryPreassignIronArachneDisplayName({
+      raceRaw: gameSetup.race,
+      genderRaw: gameSetup.gender,
+      gameSetupForReserved: gameRow && gameRow.gameSetup,
+      campaignSpec: gameRow && gameRow.campaignSpec,
+      encounterState: gameRow && gameRow.encounterState,
+      excludeUserId: uidStr,
+    });
+    if (!pr.ok) {
+      return res.json({ name: null, code: pr.reason || 'UNAVAILABLE' });
+    }
+    return res.json({ name: pr.name, code: 'OK' });
+  } catch (e) {
+    console.error('preview-character-name failed:', e);
+    return res.status(500).json({ error: 'Could not preview character name.' });
+  }
+});
+
 router.post('/generate-character', requireAuth, async (req, res) => {
   setLongRequestSocketTimeout(req);
   const body = req.body && typeof req.body === 'object' ? req.body : {};
@@ -2671,6 +2651,8 @@ router.post('/generate-character', requireAuth, async (req, res) => {
   }
   // Invitees may generate a character even when campaignSpec is missing (host still in setup, or world data only in play). World context is injected below when present.
 
+  /** When set, MUNA name was drawn before the LLM call and injected into the user prompt; sync again after parse (same string). */
+  let preassignedPcName = '';
   try {
     // Character generation is NOT an in-play DM turn. Do not use composeSystemMessages(mode: initial):
     // core/system.txt describes the narration JSON envelope and conflicts with { "playerCharacter": ... }.
@@ -2745,12 +2727,53 @@ router.post('/generate-character', requireAuth, async (req, res) => {
     } catch (e) {
       /* ignore */
     }
+    try {
+      const {
+        ironArachneNamesEnabled,
+        tryPreassignIronArachneDisplayName,
+        validatePreassignedDisplayNameFromClient,
+      } = require('../services/ironArachneNames');
+      if (ironArachneNamesEnabled()) {
+        const rawRacePre = setupForPrompt.race != null ? String(setupForPrompt.race).trim() : '';
+        const clientPreRaw =
+          body.preassignedDisplayName != null && String(body.preassignedDisplayName).trim()
+            ? String(body.preassignedDisplayName).trim()
+            : '';
+        let usedClientPreassign = false;
+        if (clientPreRaw && rawRacePre && rawRacePre.toLowerCase() !== 'random') {
+          const vr = validatePreassignedDisplayNameFromClient(clientPreRaw, {
+            gameSetupForReserved: gameRow && gameRow.gameSetup,
+            campaignSpec: gameRow && gameRow.campaignSpec,
+            encounterState: gameRow && gameRow.encounterState,
+            excludeUserId: uidStr,
+          });
+          if (vr.ok) {
+            preassignedPcName = vr.name;
+            usedClientPreassign = true;
+          }
+        }
+        if (!usedClientPreassign) {
+          const pr = await tryPreassignIronArachneDisplayName({
+            raceRaw: setupForPrompt.race,
+            genderRaw: setupForPrompt.gender,
+            gameSetupForReserved: gameRow && gameRow.gameSetup,
+            campaignSpec: gameRow && gameRow.campaignSpec,
+            encounterState: gameRow && gameRow.encounterState,
+            excludeUserId: uidStr,
+          });
+          if (pr.ok && pr.name) preassignedPcName = pr.name;
+        }
+      }
+    } catch (preErr) {
+      console.warn('generate-character: Iron Arachne preassign failed:', preErr);
+    }
     let userContent;
     try {
       userContent = Mustache.render(userTpl, {
         gameSetup: safeJsonStringifyForPrompt(setupForPrompt),
         languageInstruction: languageInstructionForTemplate,
         language,
+        preassignedPcName,
       });
     } catch (e) {
       console.error('generate-character: Mustache render failed for user template:', e);
@@ -2760,16 +2783,21 @@ router.post('/generate-character', requireAuth, async (req, res) => {
     const messagesToSend = [{ role: 'system', content: consolidated }, { role: 'user', content: userContent }];
     const charOutbound = traceMessages(
       messagesToSend,
-      'player character sheet JSON; DM core slice; character generation skill; user: partial build + structured stats'
+      'player character sheet YAML; DM core slice; character generation skill; user: partial build + structured stats'
     );
 
     // Completion budget for model *output* (spell lists, gear); fixed cap — not tied to prompt size.
     const completionBudget = 4096;
-    const charGenOptions = { max_tokens: completionBudget, temperature: 0.75, gameId: gameId || undefined };
-    charGenOptions.response_format = { type: 'json_object' };
+    const charGenFailureRef = { message: '' };
+    const charGenOptions = {
+      max_tokens: completionBudget,
+      temperature: 0.75,
+      gameId: gameId || undefined,
+      failureMessageRef: charGenFailureRef,
+    };
     let aiMessage = await generateResponse({ messages: charOutbound }, charGenOptions);
     if (!aiMessage) {
-      const detail = getLastGenerateFailureMessage() || 'No text from model.';
+      const detail = charGenFailureRef.message || 'No text from model.';
       const useLm = String(process.env.DM_USE_LM_STUDIO || '').toLowerCase() === 'true';
       const hint = useLm
         ? `LM Studio mode (DM_USE_LM_STUDIO=true). Start LM Studio, load a model, and check ${process.env.DM_LM_STUDIO_URL || 'http://localhost:1234'} — try Server Settings → API → OpenAI-compatible /v1/chat/completions.`
@@ -2783,35 +2811,14 @@ router.post('/generate-character', requireAuth, async (req, res) => {
     }
 
     function tryParsePlayerCharacterBlob(text) {
-      const rawIn = String(text || '');
-      const baseClean = stripBomAndInvisible(stripLlmChannelNoise(stripMarkdownJsonFence(rawIn)));
-
-      function parseFromCleaned(cleaned) {
-        if (!cleaned || typeof cleaned !== 'string') return null;
-        const jsonText = extractFirstJsonObject(cleaned);
-        if (jsonText) {
-          try {
-            const o = JSON.parse(jsonText);
-            if (o && typeof o === 'object' && o.playerCharacter && typeof o.playerCharacter === 'object') {
-              return o;
-            }
-          } catch (pe) {
-            console.warn('JSON.parse failed on character generator blob:', pe?.message || pe);
-          }
-          const lenient = jsonParseLenientObject(jsonText);
-          if (lenient?.playerCharacter && typeof lenient.playerCharacter === 'object') return lenient;
-          const repaired = tryParsePlayerCharacterWithBraceRepair(jsonText);
-          if (repaired) return repaired;
-        }
-        return tryParsePlayerCharacterWithBraceRepair(cleaned);
-      }
-
-      let out = parseFromCleaned(baseClean);
-      if (out) return out;
-      const normalized = normalizeJsonLikeQuotes(baseClean);
-      if (normalized !== baseClean) {
-        out = parseFromCleaned(normalized);
-        if (out) return out;
+      const structured = parseModelStructuredObject(text);
+      if (
+        structured.ok &&
+        structured.obj &&
+        structured.obj.playerCharacter &&
+        typeof structured.obj.playerCharacter === 'object'
+      ) {
+        return structured.obj;
       }
       return null;
     }
@@ -2837,24 +2844,54 @@ router.post('/generate-character', requireAuth, async (req, res) => {
         }
         return res.status(422).json({ error: charCheck.error, code: 'INVALID_PLAYER_CHARACTER' });
       }
+      try {
+        if (preassignedPcName) {
+          const { syncPlayerCharacterDisplayNameFields } = require('../playerCharacterHelpers');
+          syncPlayerCharacterDisplayNameFields(parsed.playerCharacter, preassignedPcName);
+        } else {
+          const { assignIronArachnePlayerCharacterNameIfEnabled } = require('../services/ironArachneNames');
+          await assignIronArachnePlayerCharacterNameIfEnabled(parsed.playerCharacter, {
+            gameSetup: gameRow && gameRow.gameSetup,
+            campaignSpec: gameRow && gameRow.campaignSpec,
+            encounterState: gameRow && gameRow.encounterState,
+            excludeUserId: uidStr,
+          });
+        }
+      } catch (nameSrcErr) {
+        console.warn('generate-character: Iron Arachne name assignment error (keeping model name):', nameSrcErr);
+      }
+      const charCheckAfterNames = validateGeneratedPlayerCharacter(parsed.playerCharacter);
+      if (!charCheckAfterNames.ok) {
+        console.warn('generate-character: validation failed after name source:', charCheckAfterNames.error);
+        try {
+          if (gameId) {
+            await require('../models/GameState').findOneAndUpdate(
+              { gameId },
+              { rawModelOutput: String(aiMessage).slice(0, 200000) },
+              { upsert: true, new: true }
+            );
+          }
+        } catch (pe) {
+          console.warn('Failed to persist rawModelOutput after post-name validation failure:', pe);
+        }
+        return res.status(422).json({ error: charCheckAfterNames.error, code: 'INVALID_PLAYER_CHARACTER' });
+      }
       const normalizedCharacter = ensurePlayerCharacterSheetDefaults(parsed.playerCharacter, { language });
       const persistGameId = gameId || allocateNewPartyGameId();
       const parsedOut = { playerCharacter: normalizedCharacter, gameId: persistGameId };
       try {
         const GameState = require('../models/GameState');
         const { validateDistinctEntityNames } = require('../validateEntityNameUniqueness');
-        const doc =
-          gameRow ||
-          (await GameState.findOne({ gameId: persistGameId })
-            .select('ownerUserId memberUserIds gameSetup campaignSpec encounterState')
-            .lean());
-        const baseSetup = (doc && doc.gameSetup) || {};
+        // Re-read immediately before persist so name validation sees latest rows; concurrent players
+        // must not replace the whole gameSetup (lost update). Existing games: atomic $set per user id.
+        const freshDoc = await GameState.findOne({ gameId: persistGameId })
+          .select('ownerUserId memberUserIds gameSetup campaignSpec encounterState')
+          .lean();
+        const baseSetup = (freshDoc && freshDoc.gameSetup) || {};
         const prevMap =
           baseSetup.playerCharacters && typeof baseSetup.playerCharacters === 'object' && !Array.isArray(baseSetup.playerCharacters)
             ? baseSetup.playerCharacters
             : {};
-        // Single $set on `gameSetup` — MongoDB rejects mixing $setOnInsert.gameSetup with $set on
-        // gameSetup.playerCharacters.* (ConflictingUpdateOperators) on upsert.
         let nextSetup = {
           ...baseSetup,
           language: (baseSetup && baseSetup.language) || language,
@@ -2864,24 +2901,38 @@ router.post('/generate-character', requireAuth, async (req, res) => {
         nextSetup = mergeParty(nextSetup, {});
         const nameCheck = validateDistinctEntityNames({
           gameSetup: nextSetup,
-          campaignSpec: doc && doc.campaignSpec,
-          encounterState: doc && doc.encounterState,
+          campaignSpec: freshDoc && freshDoc.campaignSpec,
+          encounterState: freshDoc && freshDoc.encounterState,
         });
         if (!nameCheck.ok) {
           return res.status(422).json({ error: nameCheck.error, code: nameCheck.code });
         }
-        await GameState.findOneAndUpdate(
-          { gameId: persistGameId },
-          {
-            $set: { gameSetup: nextSetup },
-            $setOnInsert: {
-              gameId: persistGameId,
-              ownerUserId: oid,
-              memberUserIds: [oid],
+        const langToSet = (baseSetup && baseSetup.language) || language;
+        if (freshDoc) {
+          await GameState.updateOne(
+            { gameId: persistGameId },
+            {
+              $set: {
+                [`gameSetup.playerCharacters.${uidStr}`]: normalizedCharacter,
+                'gameSetup.language': langToSet,
+              },
+              $unset: { 'gameSetup.generatedCharacter': '' },
+            }
+          );
+        } else {
+          await GameState.findOneAndUpdate(
+            { gameId: persistGameId },
+            {
+              $set: { gameSetup: nextSetup },
+              $setOnInsert: {
+                gameId: persistGameId,
+                ownerUserId: oid,
+                memberUserIds: [oid],
+              },
             },
-          },
-          { upsert: true }
-        );
+            { upsert: true }
+          );
+        }
       } catch (pe) {
         console.error('generate-character: persist to GameState failed:', pe);
         return res.status(500).json({

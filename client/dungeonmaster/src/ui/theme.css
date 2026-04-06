@@ -13,6 +13,10 @@
   /* DnD-inspired typography */
   --gm-font-sans: 'Cardo', Georgia, "Times New Roman", Times, serif; /* body / readable serif */
   --gm-font-serif: 'Cinzel', 'Cinzel Decorative', Georgia, serif; /* display / title font */
+  /* App.vue: banner + .app-layout-root + <main> column (see .app-banner, .app-layout-root). */
+  --gm-app-column-max: 980px;
+  /* Must match .app-banner horizontal padding so lobby sheets line up with banner content. */
+  --gm-banner-padding-x: 1.35rem;
 }
 
 body.gm-theme {
@@ -29,6 +33,21 @@ body.gm-theme {
   flex-direction: column;
   align-items: center;
   padding: 24px;
+}
+
+/* Fixed column: banner + main are exactly this wide (capped on small viewports). */
+.app-layout-root {
+  box-sizing: border-box;
+  width: var(--gm-app-column-max);
+  max-width: 100%;
+  min-width: 0;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.app-main-column {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .modal-backdrop {
@@ -94,7 +113,7 @@ body.gm-theme {
 .gm-shell {
   /* page background: photographic parchment texture (large, single image) */
   background-image:
-    url('../assets/parchment_texture.png'),
+    url('../assets/parchment_texture.webp'),
     radial-gradient(circle at 10% 10%, rgba(255,255,255,0.02), transparent 10%),
     radial-gradient(circle at 90% 90%, rgba(255,255,255,0.01), transparent 8%),
     linear-gradient(180deg, rgba(255,255,255,0.01), rgba(0,0,0,0.02));
@@ -125,7 +144,7 @@ body.gm-theme {
   position: absolute;
   inset: 0;
   /* same image but very low-opacity + desaturated so it reads as texture only */
-  background: url('../assets/parchment_tile.png') center/auto repeat;
+  background: url('../assets/parchment_tile.webp') center/auto repeat;
   opacity: 0.08;
   filter: grayscale(80%) contrast(80%) brightness(92%) blur(0.8px);
   pointer-events: none;
@@ -222,15 +241,16 @@ body.gm-theme {
 
 /* —— App chrome: top banner (authed + public) —— */
 .app-banner {
+  box-sizing: border-box;
   width: 100%;
-  max-width: 980px;
+  max-width: var(--gm-app-column-max);
   margin-bottom: 1.25rem;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem 1.5rem;
-  padding: 1rem 1.35rem 1.15rem;
+  padding: 1rem var(--gm-banner-padding-x) 1.15rem;
   border: 1px solid rgba(212, 180, 106, 0.28);
   border-radius: 12px;
   background: linear-gradient(165deg, rgba(26, 22, 18, 0.98) 0%, rgba(10, 8, 7, 0.99) 100%);
@@ -530,6 +550,8 @@ body.gm-theme {
 
 .chat-messages-container {
   flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   min-height: min(420px, 52vh);
   max-height: min(560px, 58vh);
   overflow-x: hidden;
@@ -570,7 +592,7 @@ body.gm-theme {
   background-color: #fbf5ea;
   /* use the subtle tile texture (desaturated, low-contrast) for panels instead of the heavy photographic texture */
   background-image:
-    url('../assets/parchment_tile.png'),
+    url('../assets/parchment_tile.webp'),
     linear-gradient(180deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.0) 100%),
     radial-gradient(circle at 10% 10%, rgba(0,0,0,0.02), transparent 20%),
     repeating-linear-gradient(0deg, rgba(0,0,0,0.01) 0px, rgba(0,0,0,0.01) 1px, rgba(0,0,0,0.00) 2px),
@@ -820,8 +842,11 @@ body.gm-theme {
   right: auto;
   left: auto;
   z-index: auto;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   width: 100%;
+  min-width: 0;
   margin: 0;
 }
 .floating-card--embedded .floating-panel.char-sheet-panel {
@@ -869,7 +894,7 @@ body.gm-theme {
 .floating-body { padding-top:8px; }
 .floating-body.char-sheet-body { padding-top: 18px; }
 .parchment-panel.char-sheet-panel .floating-body.char-sheet-body {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1035,7 +1060,7 @@ body.gm-theme {
 
 /* Character sheet tabs (FloatingCard): split attributes/story/langs · gear · spells */
 .parchment-panel .char-sheet-body .char-sheet--tabbed {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -1102,11 +1127,14 @@ body.gm-theme {
   box-shadow: none;
 }
 .parchment-panel .char-sheet-tabpanels--scroll {
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  padding-bottom: 14px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
 }
 .parchment-panel .char-sheet-panel:focus {
   outline: none;
@@ -1536,4 +1564,28 @@ body.gm-theme {
   .parchment-panel .cs-weapon-stats {
     justify-self: start;
   }
+}
+
+/*
+ * Layout debug: add ?layoutDebug=1 to the URL or run:
+ *   localStorage.setItem('dm_layout_debug','1'); location.reload();
+ * Removes outlines when query is absent/false and dm_layout_debug is not '1'.
+ */
+body.gm-layout-debug .gm-shell,
+body.gm-layout-debug .app-layout-root,
+body.gm-layout-debug .app-main-column,
+body.gm-layout-debug .app-banner,
+body.gm-layout-debug .party-lobby,
+body.gm-layout-debug .party-lobby__hero,
+body.gm-layout-debug .party-lobby__roster,
+body.gm-layout-debug .party-lobby__setup,
+body.gm-layout-debug .chat-room,
+body.gm-layout-debug .chat-room__header,
+body.gm-layout-debug .campaign-heading-row,
+body.gm-layout-debug .party-roster,
+body.gm-layout-debug .chat-messages-container,
+body.gm-layout-debug .chat-input-form,
+body.gm-layout-debug .chat-message {
+  outline: 1px dashed rgba(255, 72, 72, 0.65);
+  outline-offset: -1px;
 }

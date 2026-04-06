@@ -49,7 +49,7 @@ that this skill must respect and extend:
   - Late join after play: `gameSetup.party.pendingNarrativeIntroductionUserIds` + DM block `templates/dm/party_arrival.txt` (alias `dm_party_arrival.txt`); cleared on next successful `/generate` persist (`clearPendingNarrativeIntroductions` in `gameStatePersist.js`).
   - Party context: `templates/dm/party_context.txt` (alias `dm_party_context.txt`).
 - Utilities:
-  - `extractFirstJsonObject` robust JSON extraction for model output
+  - `parseModelStructuredObject` / `parseCampaignStageModelOutput` (YAML via `yaml` package) for model output
   - `estimateTokenCount` and dynamic completion budgeting in `gameSession.js`
   - Mustache templating for prompt rendering
 

@@ -79,7 +79,7 @@ const routes = [
         component: LoadGame,
         meta: { requiresAuth: true },
     },
-    /** Shareable invite URL (public): /join-party/<token> — only supported invite entry for this app. */
+    /** Shareable invite URL (public): /join-party/<token> → POST /api/auth/join → party lobby (/chat-room/:id). */
     {
         path: '/join-party/:token',
         name: 'JoinParty',

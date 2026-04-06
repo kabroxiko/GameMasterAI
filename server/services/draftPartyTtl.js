@@ -1,5 +1,5 @@
 /**
- * Draft parties: character generated but no substantive campaign yet (host never finished world setup).
+ * Draft / lobby parties: no substantive campaign yet (empty lobby from create-party, or character gen without world setup).
  * MongoDB TTL on `draftPartyExpiresAt` removes abandoned rows. Multi-member games skip TTL so invites are safe.
  */
 const { hasSubstantiveCampaignSpec } = require('../campaignSpecReady');

@@ -45,6 +45,16 @@ test('allMembersReady requires every member id in readyUserIds', () => {
   assert.strictEqual(allMembersReady({ readyUserIds: [String(a), String(b)] }, doc), true);
 });
 
+test('allMembersReady treats ObjectId hex case as equivalent', () => {
+  const a = new mongoose.Types.ObjectId();
+  const b = new mongoose.Types.ObjectId();
+  const doc = { ownerUserId: a, memberUserIds: [b], gameSetup: {} };
+  assert.strictEqual(
+    allMembersReady({ readyUserIds: [String(a).toUpperCase(), String(b).toLowerCase()] }, doc),
+    true
+  );
+});
+
 test('adventureHasBegun is true when assistant message exists', () => {
   assert.strictEqual(
     adventureHasBegun({
@@ -76,6 +86,29 @@ test('memberHasValidSheetForUserId false when sheet missing or invalid', () => {
   };
   assert.strictEqual(memberHasValidSheetForUserId(doc, idStr), false);
   assert.strictEqual(memberHasValidSheetForUserId(doc, ''), false);
+});
+
+test('memberHasValidSheetForUserId finds sheet when playerCharacters key differs by hex case', () => {
+  const uid = new mongoose.Types.ObjectId();
+  const idStr = String(uid);
+  const idUpper = idStr.toUpperCase();
+  const rawNoCoinage = {
+    name: 'Persisted shape',
+    max_hp: 10,
+    current_hp: 10,
+    ac: 10,
+    armor: [],
+    equipment: ['Travel clothes and boots (no armor)'],
+    tools: [],
+    weapons: [{ name: 'Club', attack_bonus: 2, damage: '1d4 bludgeoning' }],
+    languages: ['Common'],
+  };
+  const doc = {
+    ownerUserId: uid,
+    memberUserIds: [],
+    gameSetup: { language: 'English', playerCharacters: { [idUpper]: rawNoCoinage } },
+  };
+  assert.strictEqual(memberHasValidSheetForUserId(doc, idStr), true);
 });
 
 test('memberHasValidSheetForUserId applies ensurePlayerCharacterSheetDefaults before validate', () => {
