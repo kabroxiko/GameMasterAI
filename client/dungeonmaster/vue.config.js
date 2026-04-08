@@ -25,8 +25,13 @@ function wssClientPort(portFromUrl) {
     return 443;
 }
 
-/** WDS client URL: explicit wss behind HTTPS proxy, or auto from page URL. */
-function resolveDevClientWebSocketURL() {
+/**
+ * webpack-dev-server injects a small dev client that opens **one** WebSocket for live reload.
+ * Only override `client.webSocketURL` when the app is served behind HTTPS / a proxy (see env.example).
+ * Otherwise omit it so WDS derives host/port/path from `window.location` — avoids `auto://0.0.0.0:0/ws`
+ * and reconnect storms that show up as many "ws" rows in DevTools.
+ */
+function devServerClientOptions() {
     const raw = (process.env.DM_DEV_WEBSOCKET_URL || '').trim();
     if (raw) {
         try {
@@ -40,7 +45,7 @@ function resolveDevClientWebSocketURL() {
                 const n = Number(u.port);
                 if (Number.isFinite(n) && n > 0) spec.port = n;
             }
-            return spec;
+            return { webSocketURL: spec };
         } catch (_) {
             /* fall through */
         }
@@ -49,14 +54,21 @@ function resolveDevClientWebSocketURL() {
     if (/^https:\/\//i.test(siteHttps)) {
         try {
             const u = new URL(siteHttps);
-            const spec = { protocol: 'wss', hostname: u.hostname, pathname: '/ws', port: wssClientPort(u.port || NaN) };
-            return spec;
+            return {
+                webSocketURL: {
+                    protocol: 'wss',
+                    hostname: u.hostname,
+                    pathname: '/ws',
+                    port: wssClientPort(u.port || NaN),
+                },
+            };
         } catch (_) {
             /* fall through */
         }
     }
-    return 'auto://0.0.0.0:0/ws';
+    return {};
 }
+
 /** Backend for /api during `npm run serve` (same pattern as production reverse proxy: browser → same origin, proxy → API). */
 const apiProxyTarget = (process.env.DM_API_PROXY_TARGET || 'http://127.0.0.1:5001').replace(/\/$/, '');
 
@@ -69,9 +81,9 @@ module.exports = defineConfig({
         /** Full reload when sources change (hot module replacement off — see Vue alias note in chainWebpack). */
         liveReload: true,
         allowedHosts: 'all',
-        // HTTPS reverse proxy (e.g. NPM → :8080): set DM_DEV_WEBSOCKET_URL=wss://your.host/ws (must match proxy /ws).
+        // HTTPS reverse proxy: set DM_DEV_WEBSOCKET_URL (see env.example). Otherwise omit client.webSocketURL.
         client: {
-            webSocketURL: resolveDevClientWebSocketURL(),
+            ...devServerClientOptions(),
         },
         proxy: {
             '/api': {

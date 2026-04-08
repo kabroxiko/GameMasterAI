@@ -649,12 +649,12 @@ func (s *Server) handleGenerateCharacter(w http.ResponseWriter, r *http.Request,
 	if !readJSON(w, r, &body) {
 		return
 	}
+	st, out := gamesession.HandleGenerateCharacter(r.Context(), s.GS, s.Cfg, s.Hub, uid, body)
 	if s.Cfg.DebugCharacterFlow {
 		gsIn, _ := body["gameSetup"].(map[string]interface{})
 		log.Printf("[GMAI character:generate.request] userId=%s gameId=%v newParty=%v preassignedDisplayName=%v gameSetup=%s",
 			uid, body["gameId"], body["newParty"], body["preassignedDisplayName"], summarizeGameSetupForDebug(gsIn))
 	}
-	st, out := gamesession.HandleGenerateCharacter(r.Context(), s.GS, s.Cfg, s.Hub, uid, body)
 	writeJSON(w, st, localizeIfCoded(r, out))
 }
 
@@ -687,11 +687,29 @@ func (s *Server) handlePreviewCharacterName(w http.ResponseWriter, r *http.Reque
 		}
 		gameRow = doc
 	}
-	gs, _ := body["gameSetup"].(map[string]interface{})
-	if gs == nil {
-		gs = map[string]interface{}{}
+	rawGS, _ := body["gameSetup"].(map[string]interface{})
+	if rawGS == nil {
+		rawGS = map[string]interface{}{}
 	}
-	gs = gamesession.ResolveCharacterSetupForGeneration(gs)
+	originalName := strings.TrimSpace(fmt.Sprint(rawGS["name"]))
+	if strings.EqualFold(originalName, "random") {
+		originalName = ""
+	}
+	var randomIntentName bool
+	if ri, ok := rawGS["randomIntent"].(map[string]interface{}); ok && ri != nil {
+		if b, ok := ri["name"].(bool); ok && b {
+			randomIntentName = true
+		}
+	}
+	var nameIsRandom bool
+	if randomIntentName {
+		nameIsRandom = true
+		originalName = ""
+	} else {
+		nameIsRandom = originalName == ""
+	}
+
+	gs := gamesession.ResolveCharacterSetupForGeneration(rawGS)
 	if s.Cfg.DebugCharacterFlow {
 		gidStr := ""
 		if gameID != nil {
@@ -700,8 +718,15 @@ func (s *Server) handlePreviewCharacterName(w http.ResponseWriter, r *http.Reque
 		log.Printf("[GMAI character:preview-name.request] userId=%s gameId=%s newParty=%v namesEnabled=%v gameSetup=%s",
 			uid, gidStr, wantsNew, ironarachne.NamesEnabled(), summarizeGameSetupForDebug(gs))
 	}
+	if !nameIsRandom {
+		gs["name"] = originalName
+		gamesession.MergeRandomIntentNameFlag(gs, false)
+		writeJSON(w, http.StatusOK, map[string]interface{}{"code": "OK", "resolvedGameSetup": gs})
+		return
+	}
+
 	if !ironarachne.NamesEnabled() {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"name": nil, "code": "IRON_NAMES_DISABLED"})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"code": "IRON_NAMES_DISABLED", "resolvedGameSetup": gs})
 		return
 	}
 	var gsSetup, campaignSpec, encounterState map[string]interface{}
@@ -719,10 +744,12 @@ func (s *Server) handlePreviewCharacterName(w http.ResponseWriter, r *http.Reque
 		if code == "" {
 			code = "UNAVAILABLE"
 		}
-		writeJSON(w, http.StatusOK, map[string]interface{}{"name": nil, "code": code, "resolvedGameSetup": gs})
+		writeJSON(w, http.StatusOK, map[string]interface{}{"code": code, "resolvedGameSetup": gs})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"name": name, "code": "OK", "resolvedGameSetup": gs})
+	gs["name"] = name
+	gamesession.MergeRandomIntentNameFlag(gs, true)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"code": "OK", "resolvedGameSetup": gs})
 }
 
 var wsUpgrader = websocket.Upgrader{

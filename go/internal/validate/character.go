@@ -8,7 +8,24 @@ import (
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	playerchar "github.com/deckofdmthings/gmai/internal/pc"
 )
+
+// asStringMap decodes BSON/JSON subdocuments for playerCharacter rows (weapons, skills, etc.).
+func asStringMap(v interface{}) (map[string]interface{}, bool) {
+	if v == nil {
+		return nil, false
+	}
+	switch m := v.(type) {
+	case map[string]interface{}:
+		return m, true
+	case primitive.M:
+		return map[string]interface{}(m), true
+	default:
+		return nil, false
+	}
+}
 
 var damageDiceRe = regexp.MustCompile(`(?i)\d*d\d+`)
 
@@ -79,6 +96,19 @@ func EnsurePlayerCharacterSheetDefaults(pc map[string]interface{}, language stri
 		}
 	}
 	applyCoinageInPlace(out)
+	if out[playerchar.CombatPrecomputedKey] == true && playerchar.CombatFieldsPresent(out) {
+		delete(out, playerchar.CombatPrecomputedKey)
+	} else {
+		delete(out, playerchar.CombatPrecomputedKey)
+		playerchar.ComputeStatsCoinageAndCombat(out, language)
+	}
+	if out[playerchar.SpellsPrecomputedKey] == true && playerchar.SpellsFieldsPresent(out) {
+		delete(out, playerchar.SpellsPrecomputedKey)
+	} else {
+		delete(out, playerchar.SpellsPrecomputedKey)
+		playerchar.ComputeAndSetSpells(out, language)
+	}
+	playerchar.ComputeAndSetSkills(out, language)
 	lang := strings.ToLower(language)
 	langs, _ := out["languages"].([]interface{})
 	if len(langs) == 0 {
@@ -164,6 +194,31 @@ func asIfaceSlice(v interface{}) ([]interface{}, bool) {
 	}
 }
 
+// StripAcBonusFromArmorWeaponsInPlace removes ac_bonus from armor and weapon rows (generate-character contract).
+func StripAcBonusFromArmorWeaponsInPlace(pc map[string]interface{}) {
+	if pc == nil {
+		return
+	}
+	if arm, ok := asIfaceSlice(pc["armor"]); ok {
+		for i, it := range arm {
+			if m, ok := asStringMap(it); ok && m != nil {
+				delete(m, "ac_bonus")
+				arm[i] = m
+			}
+		}
+		pc["armor"] = arm
+	}
+	if wpn, ok := asIfaceSlice(pc["weapons"]); ok {
+		for i, it := range wpn {
+			if m, ok := asStringMap(it); ok && m != nil {
+				delete(m, "ac_bonus")
+				wpn[i] = m
+			}
+		}
+		pc["weapons"] = wpn
+	}
+}
+
 func coercePrimitiveSliceFieldsInPlace(pc map[string]interface{}) {
 	if pc == nil {
 		return
@@ -173,6 +228,97 @@ func coercePrimitiveSliceFieldsInPlace(pc map[string]interface{}) {
 			pc[key] = sl
 		}
 	}
+	// Optional: coerce `ammunition` when present (model output); server does not create or repair it.
+	if sl, ok := asIfaceSlice(pc["ammunition"]); ok {
+		pc["ammunition"] = sl
+	}
+}
+
+// coerceSkillsArrayInPlace normalizes `skills` to an array; rejects non-array values.
+func coerceSpellsArrayInPlace(pc map[string]interface{}) string {
+	if pc == nil {
+		return ""
+	}
+	raw := pc["spells"]
+	if raw == nil {
+		pc["spells"] = []interface{}{}
+		return ""
+	}
+	sl, ok := asIfaceSlice(raw)
+	if !ok {
+		return "playerCharacter.spells must be an array (use [] if none)."
+	}
+	pc["spells"] = sl
+	return ""
+}
+
+// coerceSkillsArrayInPlace normalizes `skills` to an array; rejects non-array values.
+func coerceSkillsArrayInPlace(pc map[string]interface{}) string {
+	if pc == nil {
+		return ""
+	}
+	raw := pc["skills"]
+	if raw == nil {
+		pc["skills"] = []interface{}{}
+		return ""
+	}
+	sl, ok := asIfaceSlice(raw)
+	if !ok {
+		return "playerCharacter.skills must be an array (use [] if none)."
+	}
+	pc["skills"] = sl
+	return ""
+}
+
+// ValidateModelCharacterOutput checks fields required from the LLM output after server merges
+// (stats, coinage, max_hp, ac, skills, spells, spell_slots are already applied for generate-character).
+func ValidateModelCharacterOutput(pc map[string]interface{}) (bool, string) {
+	if pc == nil {
+		return false, "playerCharacter must be an object"
+	}
+	coercePrimitiveSliceFieldsInPlace(pc)
+	if errStr := coerceSpellsArrayInPlace(pc); errStr != "" {
+		return false, errStr
+	}
+	if strings.TrimSpace(str(pc["name"])) == "" {
+		return false, "playerCharacter.name is required"
+	}
+	if _, ok := asIfaceSlice(pc["armor"]); !ok {
+		return false, "playerCharacter.armor must be an array (use [] if none)."
+	}
+	if _, ok := asIfaceSlice(pc["equipment"]); !ok {
+		return false, "playerCharacter.equipment must be an array (may be [])."
+	}
+	if _, ok := asIfaceSlice(pc["tools"]); !ok {
+		return false, "playerCharacter.tools must be an array (may be [])."
+	}
+	if _, ok := asIfaceSlice(pc["weapons"]); !ok {
+		return false, "playerCharacter.weapons must be an array (may be [])."
+	}
+	langs, langOk := asIfaceSlice(pc["languages"])
+	if !langOk || len(langs) == 0 {
+		return false, "playerCharacter.languages must be a non-empty array of strings"
+	}
+	for i, x := range langs {
+		if strings.TrimSpace(str(x)) == "" {
+			return false, fmt.Sprintf("playerCharacter.languages[%d] must be a non-empty string.", i)
+		}
+	}
+	weapons, _ := asIfaceSlice(pc["weapons"])
+	for i, w := range weapons {
+		row, ok := asStringMap(w)
+		if !ok {
+			return false, fmt.Sprintf("weapons[%d] must be an object", i)
+		}
+		if strings.TrimSpace(str(row["name"])) == "" {
+			return false, fmt.Sprintf("weapons[%d].name is required when weapons are listed", i)
+		}
+		dmg := compactDamage(row["damage"])
+		if !damageDiceRe.MatchString(dmg) {
+			return false, fmt.Sprintf("weapons[%d].damage must include dice", i)
+		}
+	}
+	return true, ""
 }
 
 // ValidateGeneratedPlayerCharacter mirrors Node checks used by persist and lobby.
@@ -181,6 +327,12 @@ func ValidateGeneratedPlayerCharacter(pc map[string]interface{}) (bool, string) 
 		return false, "playerCharacter must be an object"
 	}
 	coercePrimitiveSliceFieldsInPlace(pc)
+	if errStr := coerceSkillsArrayInPlace(pc); errStr != "" {
+		return false, errStr
+	}
+	if errStr := coerceSpellsArrayInPlace(pc); errStr != "" {
+		return false, errStr
+	}
 	if strings.TrimSpace(str(pc["name"])) == "" {
 		return false, "playerCharacter.name is required"
 	}
@@ -233,10 +385,50 @@ func ValidateGeneratedPlayerCharacter(pc map[string]interface{}) (bool, string) 
 			return false, fmt.Sprintf("playerCharacter.languages[%d] must be a non-empty string.", i)
 		}
 	}
+	skills, _ := asIfaceSlice(pc["skills"])
+	for i, item := range skills {
+		row, ok := asStringMap(item)
+		if !ok {
+			return false, fmt.Sprintf("playerCharacter.skills[%d] must be an object", i)
+		}
+		if strings.TrimSpace(str(row["name"])) == "" {
+			return false, fmt.Sprintf("playerCharacter.skills[%d].name is required when skills are listed", i)
+		}
+		bonus, bOk := toFloat(row["bonus"])
+		if !bOk || math.IsNaN(bonus) {
+			return false, fmt.Sprintf("playerCharacter.skills[%d].bonus must be a finite number", i)
+		}
+	}
+	spells, _ := asIfaceSlice(pc["spells"])
+	for i, item := range spells {
+		row, ok := asStringMap(item)
+		if !ok {
+			return false, fmt.Sprintf("playerCharacter.spells[%d] must be an object", i)
+		}
+		if strings.TrimSpace(str(row["name"])) == "" {
+			return false, fmt.Sprintf("playerCharacter.spells[%d].name is required when spells are listed", i)
+		}
+		lv, lvOk := toFloat(row["level"])
+		if !lvOk || math.IsNaN(lv) {
+			return false, fmt.Sprintf("playerCharacter.spells[%d].level must be a finite number", i)
+		}
+	}
+	if rawSlots := pc["spell_slots"]; rawSlots != nil {
+		slots, ok := asStringMap(rawSlots)
+		if !ok {
+			return false, "playerCharacter.spell_slots must be an object with string keys when present."
+		}
+		for k, v := range slots {
+			n, nOk := toFloat(v)
+			if !nOk || math.IsNaN(n) || n < 0 {
+				return false, fmt.Sprintf("playerCharacter.spell_slots[%s] must be a non-negative number.", k)
+			}
+		}
+	}
 	weapons, _ := asIfaceSlice(pc["weapons"])
 	for i, w := range weapons {
-		row, _ := w.(map[string]interface{})
-		if row == nil {
+		row, ok := asStringMap(w)
+		if !ok {
 			return false, fmt.Sprintf("weapons[%d] must be an object", i)
 		}
 		if strings.TrimSpace(str(row["name"])) == "" {

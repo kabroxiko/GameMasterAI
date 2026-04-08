@@ -2,11 +2,12 @@ package gamesession
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"strings"
-	"time"
 
 	"github.com/deckofdmthings/gmai/internal/i18n"
+	"github.com/deckofdmthings/gmai/internal/pc"
 )
 
 // ResolveCharacterSetupForGeneration turns random/invalid picks into concrete legal ids.
@@ -16,7 +17,9 @@ func ResolveCharacterSetupForGeneration(gsIn map[string]interface{}) map[string]
 		out[k] = v
 	}
 	cat := i18n.CharacterOptionsForLocale("en")
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Deterministic seed from setup fields (excluding name) so preview-name and generate-character
+	// with the same random/empty picks resolve to the same race/class/background — not a new roll per request.
+	rng := rand.New(rand.NewSource(resolveRNGSeed(out)))
 
 	norm := func(v interface{}) string {
 		s := strings.TrimSpace(strings.ToLower(fmt.Sprint(v)))
@@ -138,6 +141,69 @@ func ResolveCharacterSetupForGeneration(gsIn map[string]interface{}) map[string]
 			out["subclass"] = sc
 		}
 	}
+	bg := strings.TrimSpace(fmt.Sprint(out["background"]))
+	if strings.EqualFold(bg, "random") {
+		bg = ""
+	}
+	bgID := pc.ResolveBackgroundID(bg)
+	backgroundIDs := []string{
+		"acolyte", "charlatan", "criminal", "entertainer", "folk_hero", "guild_artisan",
+		"hermit", "noble", "outlander", "sage", "sailor", "soldier", "urchin",
+	}
+	if bgID == "" {
+		bgID = pick(backgroundIDs)
+	}
+	if bgID != "" {
+		out["background"] = bgID
+	}
+	// Language is campaign-level (party owner / persisted gameSetup), not a character choice.
+	delete(out, "language")
+	// Empty name is omitted: POST /preview-character-name sets resolvedGameSetup.name after resolve.
+	// Non-empty names from the client stay for explicit player input.
+	if raw, ok := out["name"]; ok {
+		if strings.TrimSpace(fmt.Sprint(raw)) == "" {
+			delete(out, "name")
+		}
+	}
 	return out
 }
 
+func resolveRNGSeed(gs map[string]interface{}) int64 {
+	if gs == nil {
+		return 0
+	}
+	h := fnv.New64a()
+	// Omit "name" / display name so assigning a previewed name does not re-roll other fields.
+	keys := []string{"race", "class", "subrace", "subclass", "background", "level", "gender"}
+	for _, k := range keys {
+		h.Write([]byte{0})
+		h.Write([]byte(strings.ToLower(strings.TrimSpace(fmt.Sprint(gs[k])))))
+	}
+	return int64(h.Sum64())
+}
+
+// MergeRandomIntentNameFlag sets or clears randomIntent["name"] on gs (copies the map so callers can merge safely).
+func MergeRandomIntentNameFlag(gs map[string]interface{}, nameRandom bool) {
+	if gs == nil {
+		return
+	}
+	var ri map[string]interface{}
+	if raw, ok := gs["randomIntent"].(map[string]interface{}); ok && raw != nil {
+		ri = make(map[string]interface{}, len(raw)+1)
+		for k, v := range raw {
+			ri[k] = v
+		}
+	} else {
+		ri = map[string]interface{}{}
+	}
+	if nameRandom {
+		ri["name"] = true
+	} else {
+		delete(ri, "name")
+	}
+	if len(ri) == 0 {
+		delete(gs, "randomIntent")
+	} else {
+		gs["randomIntent"] = ri
+	}
+}

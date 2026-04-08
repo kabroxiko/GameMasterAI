@@ -293,9 +293,9 @@
             },
             /**
              * After /generate-character, optional hook (e.g. ChatRoom loadGameState) so transcript + lobby mirror refresh.
-             * SetupForm always follows with GET /game-state/load to align Vuex, confirm sheet, and join flags.
+             * If the hook returns the same GET /load payload object (`gameId`, `gameSetup`, …), SetupForm reuses it and skips a duplicate fetch.
              * @param {string} gameId
-             * @returns {Promise<void>}
+             * @returns {Promise<object|false|void>}
              */
             afterCharacterPersisted: {
                 type: Function,
@@ -338,11 +338,13 @@
                     characterClass: false,
                     subrace: false,
                     subclass: false,
+                    name: false,
                 },
                 formData: {
                     characterName: '',
                     characterClass: '',
                     characterRace: '',
+                    characterBackground: '',
                     characterLevel: 1,
                     gender: 'Male',
                     subclass: 'random',
@@ -832,7 +834,7 @@
             },
             /**
              * After the server persists a generated sheet, rehydrate from GET /game-state/load (same as refresh).
-             * Runs optional afterCharacterPersisted first (e.g. full ChatRoom load), then applies load payload here.
+             * Runs optional afterCharacterPersisted first (e.g. ChatRoom loadGameState); if it returns the load payload, skips a second GET.
              * @param {{ retainWizardFieldsIfPrefillIncomplete?: boolean }} [opts] — after regenerate, keep prior form picks when prefill leaves race/class as random.
              */
             async syncPersistedCharacterFromServer(opts = {}) {
@@ -851,16 +853,28 @@
                 if (!gid || !this.$store.getters.isAuthenticated) {
                     return false;
                 }
+                let data = null;
                 if (typeof this.afterCharacterPersisted === 'function') {
                     try {
-                        await this.afterCharacterPersisted(gid);
+                        const hookResult = await this.afterCharacterPersisted(gid);
+                        if (
+                            hookResult &&
+                            typeof hookResult === 'object' &&
+                            hookResult.gameId != null &&
+                            String(hookResult.gameId) === String(gid)
+                        ) {
+                            data = hookResult;
+                        }
                     } catch (e) {
                         // eslint-disable-next-line no-console
                         console.warn('afterCharacterPersisted failed:', e);
                     }
                 }
                 try {
-                    const { data } = await fetchGameStateLoad(gid);
+                    if (!data) {
+                        const res = await fetchGameStateLoad(gid);
+                        data = res.data;
+                    }
                     if (!data || String(data.gameId) !== String(gid)) {
                         return false;
                     }
@@ -991,6 +1005,7 @@
                         JSON.stringify({
                             characterRace: fd.characterRace,
                             characterClass: fd.characterClass,
+                            characterBackground: fd.characterBackground,
                             subrace: fd.subrace,
                             subclass: fd.subclass,
                             characterLevel: fd.characterLevel,
@@ -1008,6 +1023,10 @@
                 this.wizardRandomIntent.characterClass = isRandom(this.formData.characterClass);
                 this.wizardRandomIntent.subrace = isRandom(this.formData.subrace);
                 this.wizardRandomIntent.subclass = isRandom(this.formData.subclass);
+                const randomWord = String(this.$i18n.random || '').trim().toLowerCase();
+                const rawName = String(this.formData.characterName || '').trim();
+                this.wizardRandomIntent.name =
+                    !rawName || rawName.toLowerCase() === randomWord;
             },
             restoreWizardSelectionSession() {
                 const k = this.wizardSelectionSessionKey();
@@ -1036,12 +1055,16 @@
                     if (saved.gender === 'Male' || saved.gender === 'Female') {
                         fd.gender = saved.gender;
                     }
+                    if (saved.characterBackground != null && String(saved.characterBackground).trim()) {
+                        fd.characterBackground = String(saved.characterBackground).trim();
+                    }
                     if (saved.randomIntent && typeof saved.randomIntent === 'object') {
                         this.wizardRandomIntent = {
                             characterRace: saved.randomIntent.characterRace === true,
                             characterClass: saved.randomIntent.characterClass === true,
                             subrace: saved.randomIntent.subrace === true,
                             subclass: saved.randomIntent.subclass === true,
+                            name: saved.randomIntent.name === true,
                         };
                     } else {
                         this.syncWizardRandomIntentFromForm();
@@ -1213,15 +1236,30 @@
                     .toLowerCase()
                     .replace(/\s+/g, ' ');
             },
+            /**
+             * Authoritative race/class lists for id resolution ($i18n can be [] if catalog not merged yet).
+             */
+            catalogRacesForResolve() {
+                const fromI18n = this.$i18n.races;
+                if (Array.isArray(fromI18n) && fromI18n.length) return fromI18n;
+                const cat = this.$store.state.characterCatalog;
+                return Array.isArray(cat && cat.races) ? cat.races : [];
+            },
+            catalogClassesForResolve() {
+                const fromI18n = this.$i18n.classes;
+                if (Array.isArray(fromI18n) && fromI18n.length) return fromI18n;
+                const cat = this.$store.state.characterCatalog;
+                return Array.isArray(cat && cat.classes) ? cat.classes : [];
+            },
             /** Map sheet race string (id or localized label) to catalog race id. */
             resolveSetupRaceId(value) {
                 const raw = String(value == null ? '' : value).trim();
                 if (!raw) return '';
-                const low = raw.toLowerCase();
-                const races = this.$i18n.races || [];
+                const low = raw.toLowerCase().replace(/-/g, '_');
+                const races = this.catalogRacesForResolve();
                 for (const r of races) {
                     if (!r || !r.id || r.id === 'random') continue;
-                    if (String(r.id).toLowerCase() === low) return r.id;
+                    if (String(r.id).toLowerCase().replace(/-/g, '_') === low) return r.id;
                 }
                 for (const r of races) {
                     if (!r || !r.id || r.id === 'random') continue;
@@ -1239,11 +1277,11 @@
             resolveSetupClassId(value) {
                 const raw = String(value == null ? '' : value).trim();
                 if (!raw) return '';
-                const low = raw.toLowerCase();
-                const classes = this.$i18n.classes || [];
+                const low = raw.toLowerCase().replace(/-/g, '_');
+                const classes = this.catalogClassesForResolve();
                 for (const c of classes) {
                     if (!c || !c.id || c.id === 'random') continue;
-                    if (String(c.id).toLowerCase() === low) return c.id;
+                    if (String(c.id).toLowerCase().replace(/-/g, '_') === low) return c.id;
                 }
                 for (const c of classes) {
                     if (!c || !c.id || c.id === 'random') continue;
@@ -1656,7 +1694,6 @@
                             this.$store.commit('setGameId', sid);
                             const gs =
                                 data.gameSetup && typeof data.gameSetup === 'object' ? { ...data.gameSetup } : {};
-                            gs.language = this.$store.state.language;
                             this.joinMode = true;
                             this.persistJoinUiGameId(sid);
                             delete gs.generatedCharacter;
@@ -1673,10 +1710,7 @@
                         delete gsStrip.generatedCharacter;
                         this.joinMode = true;
                         this.persistJoinUiGameId(sid);
-                        this.$store.commit('setGameSetup', {
-                            ...gsStrip,
-                            language: this.$store.state.language,
-                        });
+                        this.$store.commit('setGameSetup', gsStrip);
                         this.confirmSheetCharacter = null;
                         this.setupPhase = 'form';
                         this.characterPreviewKey = 0;
@@ -1693,7 +1727,6 @@
                             this.$store.commit('setGameId', sid);
                             const gs =
                                 data.gameSetup && typeof data.gameSetup === 'object' ? { ...data.gameSetup } : {};
-                            gs.language = this.$store.state.language;
                             this.joinMode = true;
                             this.persistJoinUiGameId(sid);
                             delete gs.generatedCharacter;
@@ -1720,10 +1753,7 @@
                         delete gsStrip.generatedCharacter;
                         this.joinMode = true;
                         this.persistJoinUiGameId(sid);
-                        this.$store.commit('setGameSetup', {
-                            ...gsStrip,
-                            language: this.$store.state.language,
-                        });
+                        this.$store.commit('setGameSetup', gsStrip);
                         this.confirmSheetCharacter = null;
                         this.setupPhase = 'form';
                         this.characterPreviewKey = 0;
@@ -1748,7 +1778,7 @@
                     delete gs.generatedCharacter;
                     this.joinMode = false;
                     this.clearJoinUiGameId();
-                    this.$store.commit('setGameSetup', { ...gs, language: this.$store.state.language });
+                    this.$store.commit('setGameSetup', gs);
                     this.prefillFormFromPlayerCharacter(sheet, { skipName: true });
                     this.applyCharacterNameFieldFromSheetAndSession(sheet);
                     this.setupPhase = 'confirm_character';
@@ -1783,8 +1813,10 @@
                 const base = {
                     ...this.$store.state.gameSetup,
                     ...this.formData,
-                    language: this.$store.state.language,
                 };
+                if (!base.language) {
+                    base.language = this.$store.state.language;
+                }
                 delete base.generatedCharacter;
                 if (uid) {
                     base.playerCharacters = {
@@ -1968,13 +2000,6 @@
             return this.$i18n.error_generating_character;
         },
 
-        normalizedNameForCharacterApi() {
-            const raw = String(this.formData.characterName || '').trim();
-            const randomWord = String(this.$i18n.random || '').trim().toLowerCase();
-            if (!raw || raw.toLowerCase() === randomWord) return '';
-            return raw;
-        },
-
         subclassForCharacterApi() {
             const s = this.formData.subclass;
             if (!s || s === 'random') return undefined;
@@ -1991,7 +2016,7 @@
             const gid = gameId != null && String(gameId).trim() !== '' ? String(gameId).trim() : '';
             this.syncWizardRandomIntentFromForm();
             const buildGameSetupPayload = () => ({
-                name: this.normalizedNameForCharacterApi(),
+                name: String(this.formData.characterName || '').trim(),
                 gender: this.formData.gender,
                 class: this.wizardRandomIntent.characterClass ? 'random' : this.formData.characterClass,
                 race: this.wizardRandomIntent.characterRace ? 'random' : this.formData.characterRace,
@@ -2005,12 +2030,12 @@
                         ? undefined
                         : this.subraceForCharacterApi(),
                 background: this.formData.characterBackground,
-                language: this.$store.state.language,
                 randomIntent: {
                     characterRace: this.wizardRandomIntent.characterRace === true,
                     characterClass: this.wizardRandomIntent.characterClass === true,
                     subrace: this.wizardRandomIntent.subrace === true,
                     subclass: this.wizardRandomIntent.subclass === true,
+                    name: this.wizardRandomIntent.name === true,
                 },
             });
             let gameSetupPayload = buildGameSetupPayload();
@@ -2042,32 +2067,52 @@
                     const prev = await axios.post('/api/game-session/preview-character-name', previewBody, {
                         timeout: 20000,
                     });
-                    const n = prev.data && prev.data.name != null && String(prev.data.name).trim();
-                    this.characterFlowDebug('generate.preview.response', {
-                        status: prev.status,
-                        name: n ? String(prev.data.name).trim() : null,
-                        rawKeys: prev.data && typeof prev.data === 'object' ? Object.keys(prev.data) : null,
-                    });
                     const resolved =
                         prev.data && prev.data.resolvedGameSetup && typeof prev.data.resolvedGameSetup === 'object'
                             ? prev.data.resolvedGameSetup
                             : null;
+                    const n =
+                        resolved && resolved.name != null && String(resolved.name).trim()
+                            ? String(resolved.name).trim()
+                            : '';
+                    this.characterFlowDebug('generate.preview.response', {
+                        status: prev.status,
+                        name: n || null,
+                        rawKeys: prev.data && typeof prev.data === 'object' ? Object.keys(prev.data) : null,
+                    });
                     if (resolved) {
                         const rr = this.resolveSetupRaceId(resolved.race);
                         const cc = this.resolveSetupClassId(resolved.class);
-                        if (rr) this.formData.characterRace = rr;
-                        if (cc) this.formData.characterClass = cc;
+                        if (rr) {
+                            this.formData.characterRace = rr;
+                        } else if (resolved.race != null && String(resolved.race).trim()) {
+                            const fb = String(resolved.race).trim().toLowerCase().replace(/-/g, '_');
+                            if (fb && fb !== 'random') this.formData.characterRace = fb;
+                        }
+                        if (cc) {
+                            this.formData.characterClass = cc;
+                        } else if (resolved.class != null && String(resolved.class).trim()) {
+                            const fb = String(resolved.class).trim().toLowerCase().replace(/-/g, '_');
+                            if (fb && fb !== 'random') this.formData.characterClass = fb;
+                        }
                         const sr = resolved.subrace != null ? String(resolved.subrace).trim() : '';
                         const sc = resolved.subclass != null ? String(resolved.subclass).trim() : '';
                         if (sr) this.formData.subrace = sr;
                         if (sc) this.formData.subclass = sc;
+                        if (resolved.background != null && String(resolved.background).trim()) {
+                            this.formData.characterBackground = String(resolved.background).trim();
+                        }
+                        // Preview already resolved "random" server-side; sync intent from concrete ids so
+                        // generate-character does not send random again (second resolve would re-roll).
+                        this.syncWizardRandomIntentFromForm();
+                        this.persistWizardSelectionSession();
                         this.characterFlowDebug('generate.preview.resolvedSetup', {
                             resolvedGameSetup: resolved,
                             form: this.characterFlowDebugFormSnapshot(),
                         });
                     }
                     if (n && nameFieldEmptyOrRandom) {
-                        this.formData.characterName = String(prev.data.name).trim();
+                        this.formData.characterName = n;
                         this.characterNameIsManual = false;
                         this.persistCharacterNameManualSession();
                         await this.$nextTick();
@@ -2145,8 +2190,10 @@
             const mergedSetup = {
                 ...this.$store.state.gameSetup,
                 ...this.formData,
-                language: this.$store.state.language,
             };
+            if (!mergedSetup.language) {
+                mergedSetup.language = this.$store.state.language;
+            }
             if (this.joinUiActive) {
                 delete mergedSetup.generatedCharacter;
             }
@@ -2289,8 +2336,10 @@
             const mergedSetup = {
                 ...this.$store.state.gameSetup,
                 ...this.formData,
-                language: this.$store.state.language,
             };
+            if (!mergedSetup.language) {
+                mergedSetup.language = this.$store.state.language;
+            }
             if (this.joinUiActive) {
                 delete mergedSetup.generatedCharacter;
             }
@@ -2709,7 +2758,10 @@
                     entry +
                     ' Assume the player knows nothing. Allow for an organic introduction of information. (Player character is supplied by the server on play turns, not in this message.)';
 
-                if (this.$store.state.language === 'Spanish') {
+                const campaignLangForDm =
+                    (this.$store.state.gameSetup && this.$store.state.gameSetup.language) ||
+                    this.$store.state.language;
+                if (campaignLangForDm === 'Spanish') {
                     systemMessageContentDM = systemMessageContentDM + '\n\nPor favor responde en español. Responde todas las interacciones en español.';
                 }
 
@@ -2725,7 +2777,6 @@
                 const uid = this.resolveViewerUserId();
                 const gameSetupForSave = {
                     ...this.$store.state.gameSetup,
-                    language: this.$store.state.language,
                     ...(uid
                         ? {
                               playerCharacters: {
@@ -2735,6 +2786,9 @@
                           }
                         : {}),
                 };
+                if (!gameSetupForSave.language) {
+                    gameSetupForSave.language = this.$store.state.language;
+                }
                 delete gameSetupForSave.generatedCharacter;
                 const initialState = {
                     gameId: gameId,

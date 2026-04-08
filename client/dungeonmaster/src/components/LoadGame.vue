@@ -54,6 +54,40 @@
                 </div>
             </li>
         </ul>
+        <Teleport to="body">
+            <UIModal v-if="deleteConfirmGame" @close="onDeleteModalDismiss">
+                <div
+                    class="game-load-delete-modal"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="game-load-delete-modal-title"
+                >
+                    <h2 id="game-load-delete-modal-title" class="game-load-delete-modal__title">
+                        {{ $i18n.load_game_delete_modal_title }}
+                    </h2>
+                    <p class="game-load-delete-modal__name">{{ displayTitle(deleteConfirmGame) }}</p>
+                    <p class="game-load-delete-modal__body">{{ $i18n.load_game_delete_confirm }}</p>
+                    <footer class="game-load-delete-modal__footer">
+                        <button
+                            type="button"
+                            class="ui-button ui-button--ghost game-load-delete-modal__btn"
+                            :disabled="Boolean(deletingGameId)"
+                            @click="onDeleteModalDismiss"
+                        >
+                            {{ $i18n.load_game_delete_cancel }}
+                        </button>
+                        <button
+                            type="button"
+                            class="ui-button game-load-delete game-load-delete-modal__btn game-load-delete-modal__btn--danger"
+                            :disabled="Boolean(deletingGameId)"
+                            @click="confirmDeleteGame"
+                        >
+                            {{ deletingGameId ? $i18n.load_game_deleting : $i18n.load_game_delete }}
+                        </button>
+                    </footer>
+                </div>
+            </UIModal>
+        </Teleport>
     </div>
 </template>
 
@@ -62,9 +96,10 @@ import axios from 'axios';
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome';
 import { faTrash } from '@fortawesome/free-solid-svg-icons/faTrash';
 import { SESSION_CHAT_TOAST } from '@/setupSession.js';
+import UIModal from '@/ui/Modal.vue';
 
 export default {
-    components: { FontAwesomeIcon },
+    components: { FontAwesomeIcon, UIModal },
     data() {
         return {
             games: [],
@@ -72,8 +107,18 @@ export default {
             error: null,
             sessionToast: null,
             deletingGameId: null,
+            deleteConfirmGame: null,
             faTrash,
         };
+    },
+    watch: {
+        deleteConfirmGame(val) {
+            this.unbindDeleteModalEsc();
+            if (val) this.bindDeleteModalEsc();
+        },
+    },
+    beforeUnmount() {
+        this.unbindDeleteModalEsc();
     },
     methods: {
         interpolate(template, n) {
@@ -112,16 +157,33 @@ export default {
                 return '';
             }
         },
-        async deleteGame(game) {
+        deleteGame(game) {
             if (!game || !game.gameId || !game.viewerIsOwner) return;
-            // eslint-disable-next-line no-alert, no-restricted-globals
-            if (!window.confirm(this.$i18n.load_game_delete_confirm)) return;
+            this.deleteConfirmGame = game;
+        },
+        onDeleteModalDismiss() {
+            if (this.deletingGameId) return;
+            this.deleteConfirmGame = null;
+        },
+        bindDeleteModalEsc() {
+            document.addEventListener('keydown', this.onDeleteModalEsc);
+        },
+        unbindDeleteModalEsc() {
+            document.removeEventListener('keydown', this.onDeleteModalEsc);
+        },
+        onDeleteModalEsc(e) {
+            if (e.key === 'Escape') this.onDeleteModalDismiss();
+        },
+        async confirmDeleteGame() {
+            const game = this.deleteConfirmGame;
+            if (!game || !game.gameId || !game.viewerIsOwner) return;
             const gid = String(game.gameId);
             this.deletingGameId = gid;
             this.error = null;
             try {
                 await axios.delete(`/api/game-state/mine/${encodeURIComponent(gid)}`);
                 this.games = this.games.filter((g) => g && g.gameId !== gid);
+                this.deleteConfirmGame = null;
             } catch (err) {
                 const detail =
                     err &&
@@ -129,6 +191,7 @@ export default {
                     err.response.data &&
                     (err.response.data.error || err.response.data.message);
                 this.error = detail ? String(detail) : this.$i18n.load_game_delete_error;
+                this.deleteConfirmGame = null;
             } finally {
                 this.deletingGameId = null;
             }
@@ -346,5 +409,58 @@ export default {
     height: 0.85rem;
     margin-right: 0.35rem;
     vertical-align: -0.08em;
+}
+
+.game-load-delete-modal {
+    padding: 0.25rem 0.35rem 0.15rem 0;
+    max-width: min(100%, 26rem);
+}
+
+.game-load-delete-modal__title {
+    margin: 0 0 0.5rem 0;
+    font-family: var(--gm-font-serif, Georgia, serif);
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--gm-text, #e6e1d8);
+    padding-right: 2rem;
+}
+
+.game-load-delete-modal__name {
+    margin: 0 0 0.65rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #f2e6c9;
+    line-height: 1.35;
+    word-break: break-word;
+}
+
+.game-load-delete-modal__body {
+    margin: 0 0 1.15rem 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+    color: var(--gm-muted, #9a8f85);
+}
+
+.game-load-delete-modal__footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.game-load-delete-modal__btn {
+    min-height: 40px;
+    padding: 0 14px;
+    font-size: 0.9rem;
+}
+
+.game-load-delete-modal__btn--danger {
+    border-color: rgba(255, 120, 100, 0.45);
+    color: rgba(255, 200, 190, 0.95);
+}
+
+.game-load-delete-modal__btn--danger:hover:not(:disabled) {
+    border-color: rgba(255, 160, 140, 0.65);
+    color: #fff;
 }
 </style>

@@ -105,6 +105,26 @@
                     </div>
                   </div>
                 </section>
+
+                <section v-if="skillsRows.length" class="cs-block cs-block--skills">
+                  <h3 class="cs-section-title">{{ $i18n.sheet_skills }}</h3>
+                  <ul class="cs-skills-list" :aria-label="$i18n.sheet_skills">
+                    <li v-for="(row, i) in skillsRows" :key="'sk' + i">
+                      <span class="cs-skill-name">
+                        {{ row.name }}
+                        <span
+                          v-if="row.proficient"
+                          class="cs-skill-prof"
+                          :title="$i18n.skill_proficient_title"
+                          role="img"
+                          :aria-label="$i18n.skill_proficient_title"
+                          >●</span
+                        >
+                      </span>
+                      <span class="cs-skill-bonus">{{ row.bonusText }}</span>
+                    </li>
+                  </ul>
+                </section>
               </div>
             </div>
 
@@ -179,17 +199,25 @@
                   <p class="weapons-missing-hint">{{ $i18n.weapons_sheet_missing }}</p>
                 </section>
 
+                <section v-if="ammunitionList.length" class="cs-block cs-block--ammunition">
+                  <h3 class="cs-section-title">{{ $i18n.sheet_ammunition }}</h3>
+                  <ul class="cs-list cs-list--plain">
+                    <li v-for="(it, i) in ammunitionList" :key="'m'+i">{{ formatAmmunitionLine(it) }}</li>
+                  </ul>
+                </section>
+
                 <section v-if="equipmentList.length" class="cs-block cs-block--gear">
                   <h3 class="cs-section-title">{{ $i18n.equipment }}</h3>
                   <ul class="cs-list cs-list--plain">
                     <li v-for="(it, i) in equipmentList" :key="'e'+i">{{ formatEquipmentQuantity(it) }}</li>
                   </ul>
                 </section>
-                <section v-if="toolsList.length" class="cs-block cs-block--gear cs-block--tools">
+                <section v-if="showToolsSection" class="cs-block cs-block--gear cs-block--tools">
                   <h3 class="cs-section-title">{{ $i18n.sheet_tools }}</h3>
-                  <ul class="cs-list cs-list--plain">
+                  <ul v-if="toolsList.length" class="cs-list cs-list--plain">
                     <li v-for="(it, i) in toolsList" :key="'t'+i">{{ formatEquipmentQuantity(it) }}</li>
                   </ul>
+                  <p v-else class="cs-tools-empty weapons-missing-hint">{{ $i18n.sheet_tools_empty }}</p>
                 </section>
               </div>
             </div>
@@ -399,11 +427,11 @@ export default {
       if (labels[keyUnderscore]) return labels[keyUnderscore];
       return s.replace(/\*+$/u, '').trim();
     },
-    /** Normalized armor rows for display (strings or { name, ac_bonus, base_ac, ac } from server). */
+    /** Armor rows for display: objects use explicit ac/base_ac/ac_bonus only; strings are shown as-is (no client parsing). */
     armorRows() {
       const a = this.character && this.character.armor;
       if (!Array.isArray(a) || !a.length) return [];
-      return a.map((raw) => this.normalizeArmorDisplayRow(raw)).filter(Boolean);
+      return a.map((raw) => this.armorDisplayRow(raw)).filter(Boolean);
     },
     /** General adventuring gear (not PHB Tools — see `toolsList`). */
     equipmentList() {
@@ -411,11 +439,43 @@ export default {
       if (!Array.isArray(e) || !e.length) return [];
       return e.map((x) => String(x));
     },
+    /** Arrows, bolts, darts, sling bullets — separate from equipment and weapons (server + prompts). */
+    ammunitionList() {
+      const a = this.character && this.character.ammunition;
+      if (!Array.isArray(a) || !a.length) return [];
+      return a.map((x) => String(x).trim()).filter(Boolean);
+    },
     /** PHB-style tools / kits / instruments (separate from `equipment`). */
     toolsList() {
       const t = this.character && this.character.tools;
       if (!Array.isArray(t) || !t.length) return [];
       return t.map((x) => String(x).trim()).filter(Boolean);
+    },
+    /** Show Tools block when the sheet has a `tools` array (even if empty) so the section is discoverable on the gear tab. */
+    showToolsSection() {
+      const c = this.character;
+      return Boolean(c && Array.isArray(c.tools));
+    },
+    /**
+     * PHB-style skill rows: { name, bonus } with optional proficient (boolean).
+     * Sorted by localized name for a stable sheet layout.
+     */
+    skillsRows() {
+      const raw = this.character && this.character.skills;
+      if (!Array.isArray(raw) || !raw.length) return [];
+      const rows = [];
+      for (const s of raw) {
+        if (!s || typeof s !== 'object') continue;
+        const name = String(s.name || '').trim();
+        if (!name) continue;
+        rows.push({
+          name,
+          bonusText: this.formatSkillBonus(s.bonus),
+          proficient: typeof s.proficient === 'boolean' ? s.proficient : false,
+        });
+      }
+      rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+      return rows;
     },
     languageList() {
       const l = this.character && this.character.languages;
@@ -524,7 +584,10 @@ export default {
       const w = this.character && this.character.weapons;
       const hasRows = Array.isArray(w) && w.length > 0;
       const hasOther =
-        this.armorRows.length > 0 || this.equipmentList.length > 0 || this.toolsList.length > 0;
+        this.armorRows.length > 0 ||
+        this.ammunitionList.length > 0 ||
+        this.equipmentList.length > 0 ||
+        this.toolsList.length > 0;
       return !hasRows && hasOther;
     },
     hpDisplayText() {
@@ -659,6 +722,12 @@ export default {
       if (m >= 0) return `+${m}`;
       return String(m);
     },
+    formatSkillBonus(b) {
+      const n = Number(b);
+      if (!Number.isFinite(n)) return String(b == null ? '' : b);
+      if (n >= 0) return `+${n}`;
+      return String(n);
+    },
     localizeSheetField(value, list) {
       if (value == null || value === '') return '';
       const raw = String(value).trim();
@@ -677,9 +746,39 @@ export default {
       return s;
     },
     /**
-     * Armor row → { displayName, statsText } for sheet UI (matches server asArmorArray / parseArmorStringLine).
+     * Ammunition lines should always show an explicit count when the text encodes one
+     * (e.g. "Flecha x20", "20× arrows", "Bolts (12)"). Falls back to the raw line if no number is found.
      */
-    normalizeArmorDisplayRow(raw) {
+    parseAmmunitionQtyAndName(line) {
+      const raw = String(line == null ? '' : line).trim();
+      if (!raw) return { name: '', qty: null };
+      let m = raw.match(/^(.+?)\s*\((\d+)\)\s*$/);
+      if (m) {
+        const qty = parseInt(m[2], 10);
+        if (Number.isFinite(qty) && qty >= 1) return { name: m[1].trim(), qty };
+      }
+      m = raw.match(/^(\d+)\s*[x×]\s*(.+)$/i);
+      if (m) {
+        const qty = parseInt(m[1], 10);
+        if (Number.isFinite(qty) && qty >= 1) return { name: m[2].trim(), qty };
+      }
+      m = raw.match(/^(.+?)\s*[x×]\s*(\d+)\s*$/i);
+      if (m) {
+        const qty = parseInt(m[2], 10);
+        if (Number.isFinite(qty) && qty >= 1) return { name: m[1].trim(), qty };
+      }
+      return { name: raw, qty: null };
+    },
+    formatAmmunitionLine(line) {
+      const { name, qty } = this.parseAmmunitionQtyAndName(line);
+      if (qty != null && name) return `${qty}× ${name}`;
+      return this.formatEquipmentQuantity(String(line == null ? '' : line).trim());
+    },
+    /**
+     * Armor row → { displayName, statsText }. Objects: stats only from explicit `ac`, `base_ac`, or `ac_bonus`.
+     * Strings: one line as written (no regex parsing or PHB inference — prompts must supply numbers in YAML or text).
+     */
+    armorDisplayRow(raw) {
       const acLab = (this.$i18n && this.$i18n.armor_class_abbr) || 'AC';
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         const name = String(raw.name || '').trim();
@@ -695,45 +794,12 @@ export default {
         } else if (raw.ac_bonus != null && raw.ac_bonus !== '') {
           const n = Number(String(raw.ac_bonus).replace(/^\+/, ''));
           if (Number.isFinite(n)) statsText = n >= 0 ? `+${n}` : String(n);
-        } else if (/^(escudo|shield)\b/i.test(name)) {
-          statsText = '+2';
         }
         return { displayName, statsText };
       }
       const s = String(raw == null ? '' : raw).trim();
       if (!s) return null;
-      let name = s;
-      let baseAc;
-      let bonus;
-      let m = s.match(/^(.*?)\s*\(\s*(?:AC|CA)\s*(\d+)\s*\)\s*$/i);
-      if (m) {
-        name = m[1].trim();
-        baseAc = Number(m[2]);
-      }
-      if (baseAc == null) {
-        m = s.match(/^(.*?)\s*\(\s*\+?\s*(\d+)\s*\)\s*$/);
-        if (m) {
-          const n = Number(m[2]);
-          if (Number.isFinite(n)) {
-            name = m[1].trim();
-            bonus = n;
-          }
-        }
-      }
-      if (baseAc == null && bonus == null) {
-        m = s.match(/^(.*?)[,;]?\s*\+(\d+)\s*(?:to\s*)?(?:AC|CA)?\s*$/i);
-        if (m) {
-          name = m[1].trim();
-          bonus = Number(m[2]);
-        }
-      }
-      if (!name) name = s;
-      const displayName = this.formatEquipmentQuantity(name);
-      let statsText = '';
-      if (Number.isFinite(baseAc)) statsText = `${acLab} ${Math.floor(baseAc)}`;
-      else if (Number.isFinite(bonus)) statsText = bonus >= 0 ? `+${bonus}` : String(bonus);
-      else if (/^(escudo|shield)\b/i.test(name)) statsText = '+2';
-      return { displayName, statsText };
+      return { displayName: this.formatEquipmentQuantity(s), statsText: '' };
     },
     weaponQty(w) {
       const q = w && w.quantity != null ? parseInt(String(w.quantity), 10) : NaN;

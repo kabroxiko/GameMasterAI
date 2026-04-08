@@ -340,6 +340,8 @@ export default {
                 gameStateEsReconnectTimer: null,
                 gameStateEsBackoffMs: 1000,
                 pushSyncTimer: null,
+                /** After a successful loadGameState; suppress redundant SSE-driven sync (same persist). */
+                lastGameStateLoadCompletedAt: 0,
             };
         },
         // removed duplicate data() 
@@ -1180,7 +1182,10 @@ export default {
             async syncLobbyAfterCharacterPersisted(gameId) {
                 const gid = gameId != null ? String(gameId).trim() : '';
                 if (!gid) return false;
-                return await this.loadGameState(gid, { replaceLocalCharacter: true });
+                return await this.loadGameState(gid, {
+                    replaceLocalCharacter: true,
+                    markPushSyncCooldown: true,
+                });
             },
             /** Keep the transcript pinned to the latest line after load, send, or DM push. */
             scrollChatToBottom({ smooth = false } = {}) {
@@ -1296,6 +1301,13 @@ export default {
                     if (this.pushSyncTimer) clearTimeout(this.pushSyncTimer);
                     this.pushSyncTimer = setTimeout(() => {
                         this.pushSyncTimer = null;
+                        const cooldownMs = 2000;
+                        if (
+                            this.lastGameStateLoadCompletedAt > 0 &&
+                            Date.now() - this.lastGameStateLoadCompletedAt < cooldownMs
+                        ) {
+                            return;
+                        }
                         this.syncFromServer();
                     }, 350);
                 };
@@ -1964,6 +1976,8 @@ export default {
                 const gidRaw = gameId != null ? String(gameId).trim() : '';
                 if (!gidRaw) return false;
                 const replaceLocalCharacter = opts.replaceLocalCharacter === true;
+                /** When true, SSE may skip a follow-up sync for ~2s (same server notify as this load). */
+                const markPushSyncCooldown = opts.markPushSyncCooldown === true;
                 let response;
                 try {
                     response = await fetchGameStateLoad(gidRaw);
@@ -2093,7 +2107,7 @@ export default {
                     const inPartyLobby = partyPh === 'lobby' || partyPh === 'starting';
                     if (multi && uid && !pcMap[uid] && !inPartyLobby) {
                         await this.$router.replace({ path: '/setup', query: { joinGame: gidRaw } });
-                        return true;
+                        return gameState;
                     }
 
                     // Opening narration: solo bootstrap only (party lobby uses server start-party-adventure).
@@ -2107,7 +2121,10 @@ export default {
                         this.maybeStartPendingReplyPoller();
                         this.scrollChatToBottom({ smooth: false });
                     });
-                    return true;
+                    if (markPushSyncCooldown) {
+                        this.lastGameStateLoadCompletedAt = Date.now();
+                    }
+                    return gameState;
                 } catch (err) {
                     console.error('Error applying game state:', err);
                     return false;

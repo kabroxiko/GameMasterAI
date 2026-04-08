@@ -1215,6 +1215,43 @@ body.gm-theme {
   background: rgba(139, 94, 60, 0.14);
   border: 1px solid rgba(139, 94, 60, 0.22);
 }
+.parchment-panel .cs-skills-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 1rem;
+}
+@media (max-width: 520px) {
+  .parchment-panel .cs-skills-list {
+    grid-template-columns: 1fr;
+  }
+}
+.parchment-panel .cs-skills-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(43, 34, 15, 0.06);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+.parchment-panel .cs-skill-name {
+  color: rgba(43, 34, 15, 0.9);
+}
+.parchment-panel .cs-skill-bonus {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #2a2212;
+}
+.parchment-panel .cs-skill-prof {
+  margin-left: 4px;
+  opacity: 0.55;
+  font-size: 0.75em;
+  vertical-align: 0.05em;
+}
 .parchment-panel .cs-block--story {
   border-left: 4px solid rgba(139, 94, 60, 0.35);
   padding-left: 18px;
@@ -1327,6 +1364,12 @@ body.gm-theme {
   color: #1a140b;
 }
 .parchment-panel .char-weapons-missing .weapons-missing-hint {
+  color: rgba(43, 34, 15, 0.78);
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.parchment-panel .cs-tools-empty.weapons-missing-hint {
   color: rgba(43, 34, 15, 0.78);
   margin: 0;
   font-size: 0.88rem;

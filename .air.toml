@@ -1,0 +1,43 @@
+# Live reload for gmai-server — https://github.com/air-verse/air
+# Install (pin works with Go 1.22–1.23): go install github.com/air-verse/air@v1.52.3
+# Run from repo root: npm run dev
+root = "."
+tmp_dir = "tmp"
+env_files = [".env"]
+
+[build]
+  # -C must be the first build flag (Go 1.20+); output path is relative to repo root via ../tmp from module dir
+  cmd = "go build -C go -o ../tmp/gmai-server ./cmd/gmai-server"
+  bin = "./tmp/gmai-server"
+  delay = 500
+  exclude_dir = ["tmp", "vendor", ".git", "node_modules", "client", "docs", ".github"]
+  exclude_regex = ["_test\\.go"]
+  include_ext = ["go", "mod", "sum", "txt"]
+  kill_delay = "1s"
+  log = "tmp/air-build.log"
+  send_interrupt = true
+  stop_on_error = false
+
+[log]
+  main_only = false
+  silent = false
+  time = false
+
+[color]
+  app = ""
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true
+
+[proxy]
+  app_port = 0
+  enabled = false
+  proxy_port = 0

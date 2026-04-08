@@ -14,6 +14,11 @@ func normChoiceID(raw interface{}) string {
 	return s
 }
 
+// NormChoiceID normalizes a setup choice id (lowercase, underscores).
+func NormChoiceID(raw interface{}) string {
+	return normChoiceID(raw)
+}
+
 func isRandomOrEmpty(id string) bool {
 	return id == "" || id == "random"
 }
@@ -37,7 +42,12 @@ func pickSetupChoice(gs map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-// ApplyLockedCharacterChoices overwrites race, class, subrace, subclass on the generated sheet
+// PickSetupChoice returns the first non-empty, non-random string from gs for the given keys.
+func PickSetupChoice(gs map[string]interface{}, keys ...string) string {
+	return pickSetupChoice(gs, keys...)
+}
+
+// ApplyLockedCharacterChoices overwrites race, class, subrace, subclass, background on the generated sheet
 // when the client sent fixed selections in gameSetup. Display strings use internal/i18n (EN/ES).
 // Omitted or "random" setup values leave the model output unchanged for that field.
 func ApplyLockedCharacterChoices(pc map[string]interface{}, gs map[string]interface{}, language string) {
@@ -79,6 +89,13 @@ func ApplyLockedCharacterChoices(pc map[string]interface{}, gs map[string]interf
 		}
 		pc["subclass"] = lbl
 		pc["subclassId"] = id
+	}
+	if bg := pickSetupChoice(gs, "background", "characterBackground"); bg != "" {
+		if id := ResolveBackgroundID(bg); id != "" {
+			pc["background"] = localizedBackgroundLabel(id, loc)
+		} else {
+			pc["background"] = strings.TrimSpace(bg)
+		}
 	}
 }
 

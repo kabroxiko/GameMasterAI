@@ -139,6 +139,8 @@ const translations = {
     load_game_delete: 'Delete',
     load_game_delete_aria: 'Delete this game (host only)',
     load_game_delete_confirm: 'Delete this game for everyone? This cannot be undone.',
+    load_game_delete_modal_title: 'Delete this game?',
+    load_game_delete_cancel: 'Cancel',
     load_game_delete_error: 'Could not delete this game.',
     load_game_deleting: 'Deleting…',
     setup_title: 'The Start of Your Adventure',
@@ -208,8 +210,12 @@ const translations = {
     sheet_tab_spells_empty: 'No spells on this sheet.',
     equipment: 'Equipment',
     sheet_tools: 'Tools',
+    sheet_tools_empty: 'You have no tools.',
     sheet_armor: 'Armor',
+    sheet_ammunition: 'Ammunition',
     sheet_languages: 'Languages',
+    sheet_skills: 'Skills',
+    skill_proficient_title: 'Proficient: you add your proficiency bonus to this skill.',
     sheet_spells: 'Spells',
     spell_level_cantrip: 'Cantrip',
     spell_level_n: 'Level {n}',
@@ -219,20 +225,20 @@ const translations = {
     spell_slot_ordinal: '{n}',
     spell_slots_prefix: 'Slots',
     spell_slots_explain:
-      'Level 1+ spells on this list are spells your character has access to on the sheet. Casting a leveled spell spends one spell slot of that spell’s level (or higher when the rules allow). Cantrips (level 0) do not use slots.',
+      'Level 1+ spells on this list are spells your character has access to on the sheet. Casting a leveled spell spends one spell slot of that spell’s level or higher. Cantrips (level 0) do not use slots.',
     spell_prepared_sheet_explain:
       'Rows in green are prepared for today (after a long rest you can change them). Muted rows are in your spellbook or repertoire but not prepared — you cannot cast them until you prepare them.',
     spell_overflow_known_explain:
-      'Green leveled spells fit your level-1 spells known limit (PHB). Gray rows are extras the generator listed by mistake — they do not count as known for play; regenerate the character for a correct list. Spell slots still limit how many leveled spells you can cast per long rest.',
+      'Green leveled spells fit your level-1 known limit for leveled spells. Gray rows are extras the generator listed by mistake — they do not count as known for play; regenerate the character for a correct list. Spell slots still limit how many leveled spells you can cast per long rest.',
     spell_spellbook_prep_enforced_explain:
-      'Prepared spells were limited to PHB wizard rules: wizard level + Intelligence modifier (minimum 1). That is separate from spell slots (ammo): at level 1 you still have two 1st-level slots per long rest. You may prepare more 1st-level spells than you have slots. Regenerate if you want a different prepared set (the sheet picks a stable subset when the model marks too many prepared).',
+      'Prepared spells were capped to match a level-1 wizard: level plus Intelligence modifier (minimum 1). That is separate from spell slots: at level 1 you still have two 1st-level slots per long rest. You may prepare more 1st-level spells than you have slots. Regenerate if you want a different prepared set (the sheet picks a stable subset when the model marks too many prepared).',
     spell_prepared_short: 'Prepared',
     spell_prepared_title: 'Prepared after a long rest: you can cast this spell using an appropriate spell slot.',
     spell_not_prepared_short: 'Not prepared',
     spell_not_prepared_title:
-      'Known or in your spellbook, but not among today’s prepared spells — prepare it after a long rest (or use the rules for your class) before casting with a slot.',
+      'Known or in your spellbook, but not among today’s prepared spells — prepare it after a long rest before casting with a slot.',
     spell_atwill_short: 'At will',
-    spell_atwill_title: 'Cantrip: no spell slot — you can cast it freely (subject to casting time and the table).',
+    spell_atwill_title: 'Cantrip: no spell slot — you can cast it freely (subject to casting time).',
     armor_class_abbr: 'AC',
     weapons_sheet: 'Weapons',
     weapons_sheet_missing:
@@ -240,7 +246,7 @@ const translations = {
     hit_points_abbr: 'HP',
     sheet_coinage: 'Coinage',
     coin_abbr: { pp: 'pp', gp: 'gp', ep: 'ep', sp: 'sp', cp: 'cp' },
-    sheet_aria_vitals: 'Hit points, armor class, and coin purse (D&D 5e)',
+    sheet_aria_vitals: 'Hit points, armor class, and coin purse',
     level_prefix: 'Level ',
     character_gender: 'Gender',
     character_name: 'Name',
@@ -254,7 +260,7 @@ const translations = {
     random: 'Random',
     character_name_placeholder: 'Leave blank for a random name',
     /* races, classes, subclass_labels, subrace_labels: from GET /api/meta/character-options (Vuex) */
-    /* Character sheet: ability abbreviations (same as English PHB) */
+    /* Character sheet: ability abbreviations */
     statAbbr: {
       STR: 'STR',
       DEX: 'DEX',
@@ -313,7 +319,7 @@ const translations = {
       'Sign-in is not configured: set VUE_APP_DM_GOOGLE_CLIENT_ID for the client and DM_GOOGLE_CLIENT_ID (and DM_JWT_SECRET) on the server.',
     public_hero_title: 'AI-powered party fantasy play (one player or a full group)',
     public_intro_p1:
-      'Dungeon Master is a web app where an AI runs the narration and rules assistance for tabletop-style adventures. Campaigns, characters, and play sessions are private to signed-in players.',
+      'Dungeon Master is a web app where an AI guides the narration for tabletop-style play. Campaigns, characters, and play sessions are private to signed-in players.',
     public_intro_p2:
       'Sign in with Google to create a game, load your saves, or accept an invite from another player. Nothing here talks to the AI until you are logged in.',
     public_features_heading: 'What you need to know',
@@ -376,6 +382,8 @@ const translations = {
     load_game_delete: 'Eliminar',
     load_game_delete_aria: 'Eliminar esta partida (solo anfitrión)',
     load_game_delete_confirm: '¿Eliminar esta partida para todos? No se puede deshacer.',
+    load_game_delete_modal_title: '¿Eliminar esta partida?',
+    load_game_delete_cancel: 'Cancelar',
     load_game_delete_error: 'No se pudo eliminar la partida.',
     load_game_deleting: 'Eliminando…',
     setup_title: 'El comienzo de tu aventura',
@@ -445,8 +453,12 @@ const translations = {
     sheet_tab_spells_empty: 'Sin conjuros en esta hoja.',
     equipment: 'Equipo',
     sheet_tools: 'Herramientas',
+    sheet_tools_empty: 'No tienes herramientas.',
     sheet_armor: 'Armadura',
+    sheet_ammunition: 'Munición',
     sheet_languages: 'Idiomas',
+    sheet_skills: 'Habilidades',
+    skill_proficient_title: 'Competencia: sumas tu bonificador por competencia a esta habilidad.',
     sheet_spells: 'Conjuros',
     spell_level_cantrip: 'Truco',
     spell_level_n: 'Nivel {n}',
@@ -456,20 +468,20 @@ const translations = {
     spell_slot_ordinal: '{n}º',
     spell_slots_prefix: 'Espacios',
     spell_slots_explain:
-      'Los conjuros de nivel 1+ en esta lista son a los que tu personaje tiene acceso en la hoja. Lanzar un conjuro de nivel 1+ gasta un espacio de al menos ese nivel (o superior si las reglas lo permiten). Los trucos (nivel 0) no gastan espacios.',
+      'Los conjuros de nivel 1+ en esta lista son a los que tu personaje tiene acceso en la hoja. Lanzar un conjuro de nivel 1+ gasta un espacio de al menos ese nivel o superior. Los trucos (nivel 0) no gastan espacios.',
     spell_prepared_sheet_explain:
       'Las filas en verde están preparados para hoy (tras un descanso largo puedes cambiarlos). Las apagadas están en el grimorio o repertorio pero no preparados: no puedes lanzarlos con espacio hasta prepararlos.',
     spell_overflow_known_explain:
-      'Los conjuros de nivel 1 en verde encajan en tu límite de conjuros conocidos de nivel 1 (PHB). Los grises son entradas de más del generador: no cuentan como conocidos para jugar; regenera el personaje para una lista correcta. Los espacios siguen limitando cuántos conjuros de nivel 1+ puedes lanzar por descanso largo.',
+      'Los conjuros de nivel 1 en verde encajan en tu límite de conjuros conocidos de nivel 1. Los grises son entradas de más del generador: no cuentan como conocidos para jugar; regenera el personaje para una lista correcta. Los espacios siguen limitando cuántos conjuros de nivel 1+ puedes lanzar por descanso largo.',
     spell_spellbook_prep_enforced_explain:
-      'Los conjuros preparados se ajustaron a las reglas PHB del mago: nivel de mago + modificador de Inteligencia (mínimo 1). Eso es aparte de los espacios (munición): en nivel 1 sigues teniendo dos espacios de nivel 1 por descanso largo. Puedes preparar más conjuros de nivel 1 de los que tienes espacios. Regenera si quieres otro conjunto preparado (la hoja elige un subconjunto estable si el modelo preparó de más).',
+      'Los conjuros preparados se ajustaron al tope de un mago de nivel 1: nivel de mago + modificador de Inteligencia (mínimo 1). Eso es aparte de los espacios: en nivel 1 sigues teniendo dos espacios de nivel 1 por descanso largo. Puedes preparar más conjuros de nivel 1 de los que tienes espacios. Regenera si quieres otro conjunto preparado (la hoja elige un subconjunto estable si el modelo preparó de más).',
     spell_prepared_short: 'Preparado',
     spell_prepared_title: 'Preparado tras un descanso largo: puedes lanzarlo gastando un espacio del nivel adecuado.',
     spell_not_prepared_short: 'No preparado',
     spell_not_prepared_title:
-      'Conocido o en el grimorio, pero no entre los conjuros preparados de hoy — prepáralo tras un descanso largo (o según las reglas de tu clase) antes de gastar un espacio.',
+      'Conocido o en el grimorio, pero no entre los conjuros preparados de hoy — prepáralo tras un descanso largo antes de gastar un espacio.',
     spell_atwill_short: 'A voluntad',
-    spell_atwill_title: 'Truco: no gasta espacio; puedes lanzarlo con libertad (tiempo de lanzamiento y mesa mediante).',
+    spell_atwill_title: 'Truco: no gasta espacio; puedes lanzarlo con libertad (según el tiempo de lanzamiento).',
     armor_class_abbr: 'CA',
     weapons_sheet: 'Armas',
     weapons_sheet_missing:
@@ -477,7 +489,7 @@ const translations = {
     hit_points_abbr: 'PG',
     sheet_coinage: 'Monedas',
     coin_abbr: { pp: 'pp', gp: 'po', ep: 'me', sp: 'mp', cp: 'pc' },
-    sheet_aria_vitals: 'Puntos de golpe, clase de armadura y monedas (D&D 5e)',
+    sheet_aria_vitals: 'Puntos de golpe, clase de armadura y monedas',
     level_prefix: 'Nivel ',
     character_gender: 'Género',
     character_name: 'Nombre',
@@ -491,7 +503,7 @@ const translations = {
     random: 'Aleatorio',
     character_name_placeholder: 'Déjalo vacío para un nombre al azar',
     /* races, classes, subclass_labels, subrace_labels: from GET /api/meta/character-options (Vuex) */
-    /* Character sheet: abreviaturas de características (convención D&D en español) */
+    /* Character sheet: abreviaturas de características */
     statAbbr: {
       STR: 'FUE',
       DEX: 'DES',
@@ -547,7 +559,7 @@ const translations = {
       'Inicio de sesión no configurado: define VUE_APP_DM_GOOGLE_CLIENT_ID en el cliente y DM_GOOGLE_CLIENT_ID (y DM_JWT_SECRET) en el servidor.',
     public_hero_title: 'Juego de fantasía en grupo con IA (un jugador o muchos)',
     public_intro_p1:
-      'Dungeon Master es una aplicación web donde una IA guía la narración y apoya las reglas al estilo de rol en mesa. Campañas, personajes y partidas son privados para usuarios identificados.',
+      'Dungeon Master es una aplicación web donde una IA guía la narración al estilo de rol en mesa. Campañas, personajes y partidas son privados para usuarios identificados.',
     public_intro_p2:
       'Inicia sesión con Google para crear una partida, cargar tus guardados o aceptar una invitación. Nada llama a la IA hasta que hay sesión.',
     public_features_heading: 'Qué debes saber',

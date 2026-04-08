@@ -33,7 +33,7 @@ The project originated from Cole Porter (Deck of DM Things on YouTube) and was s
 
 ## Prerequisites
 
-- **Go** (1.22+) to build and run `gmai-server` (`npm start` from the repository root).
+- **Go** (1.22+) to build and run `gmai-server` (`npm start` from the repository root). Optional **[Air](https://github.com/air-verse/air)** for auto-rebuild: `go install github.com/air-verse/air@v1.52.3` (pin avoids newer Air requiring Go 1.25+), then `npm run dev` from the repo root (the script prepends `$(go env GOPATH)/bin` to `PATH` so `air` is found; watches `go/` and prompt `*.txt` under `go/internal/prompts/promptfiles/`). Use `@latest` if your toolchain is current.
 - **Node.js** and **npm** for the Vue client (`client/dungeonmaster`) and tooling listed in the root `package.json`.
 
 ## Setting up External Dependencies
@@ -91,7 +91,7 @@ To start Dungeon Master:
 
 1. Open a terminal and navigate to the project's root directory.
 2. Copy [`env.example`](env.example) to `.env` in the repository root and configure MongoDB, JWT, Google client ID, etc.
-3. Run `npm start` to run the **Go** API (`gmai-server`). For a local full stack (Vue dev server as a child process), set `DM_SPAWN_VUE_DEV=true` in `.env`. Otherwise run the client separately: `npm run client`.
+3. Run `npm start` to run the **Go** API (`gmai-server`), or `npm run dev` if you use Air (restarts the server when Go sources or embedded prompt files change). For a local full stack (Vue dev server as a child process), set `DM_SPAWN_VUE_DEV=true` in `.env`. Otherwise run the client separately: `npm run client`.
 4. Open your web browser at the URL shown (Vue dev server defaults to port 8080; the API defaults to port 5001 unless `PORT` is set).
 
 You will be greeted with the Dungeon Master home page. Sign in with Google (after configuring OAuth origins), set a **player name** the first time, then use **New game** or **Load game** to play.

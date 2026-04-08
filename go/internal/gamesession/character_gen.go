@@ -32,9 +32,11 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 	}
 	applyBackendRandomIntent(gsIn)
 	gsIn = ResolveCharacterSetupForGeneration(gsIn)
-	language := "English"
-	if l, ok := body["language"].(string); ok && strings.TrimSpace(l) != "" {
-		language = strings.TrimSpace(l)
+	// Resolve returns a new map; write back so body["gameSetup"] matches what the LLM uses (setupForPrompt is built from gsIn).
+	body["gameSetup"] = gsIn
+	bodyLanguage := ""
+	if l, ok := body["language"].(string); ok {
+		bodyLanguage = strings.TrimSpace(l)
 	}
 	var gameID *string
 	if raw := body["gameId"]; raw != nil && strings.TrimSpace(fmt.Sprint(raw)) != "" {
@@ -64,6 +66,22 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 			}
 		}
 	}
+	// Campaign language (persisted gameSetup.language) wins over client body.language when a game exists.
+	language := ""
+	if gameRow != nil {
+		if gs, ok := gameRow["gameSetup"].(map[string]interface{}); ok && gs != nil {
+			if l, ok := gs["language"].(string); ok {
+				language = strings.TrimSpace(l)
+			}
+		}
+	}
+	if language == "" {
+		language = bodyLanguage
+	}
+	if language == "" {
+		language = "English"
+	}
+
 	setupForPrompt := map[string]interface{}{}
 	for k, v := range gsIn {
 		setupForPrompt[k] = v
@@ -120,6 +138,16 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 		}
 	}
 	resolvedDisplayName := ironarachne.ResolveDisplayNameForGeneration(ctx, preassignedPcName, gsIn, gameRow, userID)
+	combatPrecomputed := pc.CombatFromGameSetup(gsIn, resolvedDisplayName, language)
+	combatAuthoritativeJSON := "{}"
+	if b, err := json.Marshal(combatPrecomputed); err == nil {
+		combatAuthoritativeJSON = string(b)
+	}
+	spellsPrecomputed := pc.SpellsFromGameSetup(gsIn, resolvedDisplayName, language)
+	spellsAuthoritativeJSON := "{}"
+	if b, err := json.Marshal(spellsPrecomputed); err == nil {
+		spellsAuthoritativeJSON = string(b)
+	}
 	// Prompt stack: YAML guard + character-only scope + skills/character.txt (large on purpose — PHB gear/spells/coinage
 	// so the model returns a complete level-1 sheet). Language text uses rules/language_*_character.txt (no campaign title rules).
 	scope := promptmgr.LoadPrompt("skills/character_generation_scope.txt")
@@ -169,10 +197,12 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 		gsJSON = string(b)
 	}
 	userContent, err := mustache.Render(userTpl, map[string]interface{}{
-		"gameSetup":           gsJSON,
-		"languageInstruction": langInstr,
-		"language":            language,
-		"pcDisplayName":       resolvedDisplayName,
+		"gameSetup":                     gsJSON,
+		"languageInstruction":           langInstr,
+		"language":                      language,
+		"pcDisplayName":                 resolvedDisplayName,
+		"serverCombatAuthoritativeJSON": combatAuthoritativeJSON,
+		"serverSpellsAuthoritativeJSON": spellsAuthoritativeJSON,
 	})
 	if err != nil {
 		return 500, map[string]interface{}{"error": "generate-character: failed to render user prompt template.", "details": err.Error()}
@@ -213,13 +243,25 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 	pc.StripModelGeneratedNames(pcRaw)
 	pc.SyncDisplayNameFields(pcRaw, resolvedDisplayName)
 	pc.ApplyLockedCharacterChoices(pcRaw, gsIn, language)
-	if chk, errStr := validate.ValidateGeneratedPlayerCharacter(pcRaw); !chk {
+	for _, k := range []string{"skills", "stats", "coinage", "currency", "max_hp", "ac", "spells", "spell_slots"} {
+		delete(pcRaw, k)
+	}
+	pc.MergePrecomputedCombat(pcRaw, combatPrecomputed)
+	pc.MergePrecomputedSpells(pcRaw, spellsPrecomputed)
+	validate.StripAcBonusFromArmorWeaponsInPlace(pcRaw)
+	if chk, errStr := validate.ValidateModelCharacterOutput(pcRaw); !chk {
 		if gameID != nil {
 			_, _ = d.Coll.UpdateOne(ctx, bson.M{"gameId": *gameID}, bson.M{"$set": bson.M{"rawModelOutput": trunc200k(aiMessage)}}, options.Update().SetUpsert(true))
 		}
 		return 422, map[string]interface{}{"error": errStr, "code": "INVALID_PLAYER_CHARACTER"}
 	}
 	normalized := validate.EnsurePlayerCharacterSheetDefaults(pcRaw, language)
+	if chk, errStr := validate.ValidateGeneratedPlayerCharacter(normalized); !chk {
+		if gameID != nil {
+			_, _ = d.Coll.UpdateOne(ctx, bson.M{"gameId": *gameID}, bson.M{"$set": bson.M{"rawModelOutput": trunc200k(aiMessage)}}, options.Update().SetUpsert(true))
+		}
+		return 422, map[string]interface{}{"error": errStr, "code": "INVALID_PLAYER_CHARACTER"}
+	}
 	persistGameID := ""
 	if gameID != nil {
 		persistGameID = *gameID
@@ -282,6 +324,10 @@ func applyBackendRandomIntent(gsIn map[string]interface{}) {
 	}
 	if isTrue(rawIntent["subclass"]) {
 		gsIn["subclass"] = "random"
+	}
+	if isTrue(rawIntent["name"]) {
+		// Client may leave the localized "Random" label in the name field; do not treat it as a literal PC name.
+		delete(gsIn, "name")
 	}
 	delete(gsIn, "randomIntent")
 }

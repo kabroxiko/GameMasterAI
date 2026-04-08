@@ -4,6 +4,7 @@
   "description": "A Web-based app for AI-driven TTRPG experiences",
   "scripts": {
     "start": "go run -C go ./cmd/gmai-server",
+    "dev": "PATH=\"$(go env GOPATH)/bin:$PATH\" exec air",
     "server": "go run -C go ./cmd/gmai-server",
     "client": "cd client/dungeonmaster && npm run serve",
     "build": "vue-cli-service build",
