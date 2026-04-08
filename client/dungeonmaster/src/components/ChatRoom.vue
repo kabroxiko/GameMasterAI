@@ -184,6 +184,30 @@
                 </ul>
                 <p class="party-roster__tip">{{ $i18n.party_sync_tip }}</p>
             </div>
+            <details v-if="showWorldMapPanel" class="chat-room__world-map">
+                <summary class="chat-room__world-map-summary">{{ $i18n.world_map_panel_title }}</summary>
+                <p class="chat-room__world-map-hint">{{ $i18n.world_map_panel_hint }}</p>
+                <p v-if="viewerIsGameOwner" class="chat-room__world-map-tools">
+                    <button
+                        type="button"
+                        class="ui-button ui-button--ghost chat-room__world-map-btn"
+                        :disabled="worldMapSaveBusy"
+                        @click="regenerateProceduralWorldMap"
+                    >
+                        {{ worldMapSaveBusy ? $i18n.world_map_save_busy : $i18n.world_map_regenerate }}
+                    </button>
+                    <a
+                        class="chat-room__world-map-link"
+                        href="https://azgaar.github.io/Fantasy-Map-Generator/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >{{ $i18n.world_map_external_tool }}</a>
+                </p>
+                <ul v-if="worldMapRegionLines.length" class="chat-room__world-map-list" :aria-label="$i18n.world_map_regions_heading">
+                    <li v-for="(line, idx) in worldMapRegionLines" :key="'wm' + idx">{{ line }}</li>
+                </ul>
+                <p v-else-if="!viewerIsGameOwner" class="chat-room__world-map-empty">{{ $i18n.world_map_none }}</p>
+            </details>
         </header>
         <!-- floating card handled globally -->
         <div ref="transcriptRoot" class="chat-messages-container chat-room__transcript">
@@ -242,6 +266,7 @@ import { absoluteInviteUrl } from '@/utils/inviteLink.js';
 import { resolveApiBaseURL, resolveGameStateEventsUrl } from '@/utils/apiBase.js';
 import { fetchGameStateLoad } from '@/utils/fetchGameStateLoad.js';
 import { SESSION_CHAT_TOAST } from '@/setupSession.js';
+import { buildProceduralWorldMap } from '@/utils/worldMapProcedural.js';
 import { faUserPlus } from '@fortawesome/free-solid-svg-icons/faUserPlus';
 import { faCircleCheck } from '@fortawesome/free-solid-svg-icons/faCircleCheck';
 import { faHourglassHalf } from '@fortawesome/free-solid-svg-icons/faHourglassHalf';
@@ -298,6 +323,10 @@ export default {
                 lastEncounterState: null,
                 isSending: false,
                 campaignTitle: '',
+                /** campaignSpec.worldMap — shown in chat header; host can regenerate procedurally. */
+                campaignWorldMap: null,
+                campaignKeyLocations: [],
+                worldMapSaveBusy: false,
                 gameOwnerUserId: null,
                 /** From GET /game-state/load — host vs member for invite UI. */
                 viewerIsGameOwner: null,
@@ -594,6 +623,21 @@ export default {
             isPartyLobby() {
                 const ph = this.partyPhase;
                 return ph === 'lobby' || ph === 'starting';
+            },
+            showWorldMapPanel() {
+                if (this.isPartyLobby) return false;
+                const regs = this.campaignWorldMap && this.campaignWorldMap.regions;
+                if (Array.isArray(regs) && regs.length > 0) return true;
+                return this.viewerIsGameOwner === true;
+            },
+            worldMapRegionLines() {
+                const wm = this.campaignWorldMap;
+                if (!wm || !Array.isArray(wm.regions)) return [];
+                return wm.regions.map((r) => {
+                    const nb = Array.isArray(r.neighborIds) ? r.neighborIds.join(', ') : '';
+                    const terr = r.terrain ? ` (${r.terrain})` : '';
+                    return `${r.name || r.id}${terr}: ${nb || '—'}`;
+                });
             },
             lastStartError() {
                 const p = this.$store.state.gameSetup && this.$store.state.gameSetup.party;
@@ -1798,6 +1842,28 @@ export default {
                 };
             },
 
+            async regenerateProceduralWorldMap() {
+                if (this.viewerIsGameOwner !== true || this.worldMapSaveBusy) return;
+                const gid = this.$store.state.gameId;
+                if (!gid) return;
+                this.worldMapSaveBusy = true;
+                this.errorMessage = null;
+                try {
+                    const wm = buildProceduralWorldMap(this.campaignKeyLocations);
+                    const { data } = await axios.post('/api/game-session/bootstrap-session', {
+                        ...this.buildPersistPayload(),
+                        campaignSpec: { worldMap: wm },
+                    });
+                    const next = data && data.campaignSpec && data.campaignSpec.worldMap;
+                    this.campaignWorldMap = next && typeof next === 'object' ? next : wm;
+                } catch (e) {
+                    const apiErr = e.response && e.response.data && e.response.data.error;
+                    this.errorMessage = apiErr || e.message || 'Could not save world map.';
+                } finally {
+                    this.worldMapSaveBusy = false;
+                }
+            },
+
             /** Apply a /generate-shaped payload (or partyDm from append flush) to local chat state. */
             applyDmPayloadToConversation(responseData, userMessage) {
                 if (responseData && Object.prototype.hasOwnProperty.call(responseData, 'encounterState')) {
@@ -2049,6 +2115,9 @@ export default {
                     const spec = gameState.campaignSpec;
                     this.campaignTitle =
                         spec && typeof spec.title === 'string' && spec.title.trim() ? spec.title.trim() : '';
+                    this.campaignKeyLocations = spec && Array.isArray(spec.keyLocations) ? spec.keyLocations : [];
+                    this.campaignWorldMap =
+                        spec && spec.worldMap && typeof spec.worldMap === 'object' ? spec.worldMap : null;
 
                     const uid = this.myUserIdStr;
                     const sheetForMe = uid ? this.pickPlayerCharacterFromStore(uid) : null;
@@ -2168,6 +2237,68 @@ export default {
     align-items: stretch;
     width: 100%;
     box-sizing: border-box;
+  }
+
+  .chat-room__world-map {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 12px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(212, 180, 106, 0.16);
+    background: rgba(0, 0, 0, 0.2);
+    font-size: 0.84rem;
+    line-height: 1.45;
+    color: var(--gm-muted, #9a8f85);
+  }
+
+  .chat-room__world-map-summary {
+    cursor: pointer;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    color: rgba(230, 225, 216, 0.82);
+  }
+
+  .chat-room__world-map-hint {
+    margin: 0.4rem 0 0.35rem;
+  }
+
+  .chat-room__world-map-tools {
+    margin: 0.35rem 0 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+  }
+
+  .chat-room__world-map-btn {
+    font-size: 0.82rem;
+    min-height: 36px;
+  }
+
+  .chat-room__world-map-link {
+    color: #c9e0ff;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    font-size: 0.82rem;
+  }
+
+  .chat-room__world-map-link:hover {
+    color: #e8f2ff;
+  }
+
+  .chat-room__world-map-list {
+    margin: 0.25rem 0 0;
+    padding-left: 1.1rem;
+    color: var(--gm-text, #e6e1d8);
+    font-size: 0.8rem;
+  }
+
+  .chat-room__world-map-empty {
+    margin: 0.35rem 0 0;
+    font-style: italic;
+    opacity: 0.85;
   }
 
   .chat-room__dm-wait {

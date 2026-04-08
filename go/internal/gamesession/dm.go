@@ -116,11 +116,14 @@ func HandleDmGenerate(ctx context.Context, d *Deps, cfg *config.Config, userID s
 	}
 	if gs != nil {
 		if spec, ok := gs["campaignSpec"].(map[string]interface{}); ok && spec != nil {
+			if wm := renderWorldMapInject(spec); wm != "" {
+				consolidated = wm + "\n\n" + consolidated
+			}
 			inj := promptmgr.LoadPrompt("templates/dm/inject_explore.txt")
 			if inj != "" && (mode == "exploration" || mode == "explore") {
 				// minimal Mustache data
 				data := map[string]interface{}{
-					"factions":                 []interface{}{},
+					"factions":                   []interface{}{},
 					"dmHiddenAdventureObjective": dmHiddenObjective(spec),
 				}
 				rendered, _ := mustache.Render(inj, data)
@@ -333,6 +336,30 @@ func renderPCBlock(gs map[string]interface{}, language, requestingUserID string)
 		return ""
 	}
 	return s
+}
+
+// renderWorldMapInject adds structured region topology so the model can reason about travel and placement.
+func renderWorldMapInject(spec map[string]interface{}) string {
+	if spec == nil {
+		return ""
+	}
+	wm, _ := spec["worldMap"].(map[string]interface{})
+	if wm == nil {
+		return ""
+	}
+	norm := campaignspec.NormalizeWorldMap(wm)
+	if norm == nil {
+		return ""
+	}
+	b, err := json.Marshal(norm)
+	if err != nil {
+		return ""
+	}
+	s := string(b)
+	if len(s) > 4500 {
+		s = s[:4500]
+	}
+	return "DM-ONLY WORLD MAP (topology: use region neighborIds for travel, borders, and \"what is nearby\"; use siteLinks to place named key locations inside regions. Never dump this JSON to players as a raw block—describe geography in narration.)\n" + s
 }
 
 func dmHiddenObjective(spec map[string]interface{}) string {

@@ -260,8 +260,12 @@ func generateCampaignStage(ctx context.Context, d *Deps, gameID, stage string, c
 		map[string]interface{}{"role": "system", "content": consolidated},
 		map[string]interface{}{"role": "user", "content": userPrompt},
 	}
+	maxTok := 800
+	if stage == "keyLocations" {
+		maxTok = 1400
+	}
 	aiMessage, err := llm.GenerateResponse(ctx, d.Cfg, map[string]interface{}{"messages": msgs}, map[string]interface{}{
-		"max_tokens": 800, "temperature": 0.8, "gameId": gameID,
+		"max_tokens": maxTok, "temperature": 0.8, "gameId": gameID,
 	})
 	if err != nil || aiMessage == "" {
 		return false
@@ -284,10 +288,20 @@ func generateCampaignStage(ctx context.Context, d *Deps, gameID, stage string, c
 		return false
 	}
 	key := "campaignSpec." + stage
-	_, err = d.Coll.UpdateOne(ctx, bson.M{"gameId": gameID}, bson.M{"$set": bson.M{
-		key:            coerced,
+	set := bson.M{
+		key:              coerced,
 		"rawModelOutput": trunc200k(aiMessage),
-	}}, options.Update().SetUpsert(true))
+	}
+	if stage == "keyLocations" {
+		if root, ok := data.(map[string]interface{}); ok && root != nil {
+			if wm, ok := root["worldMap"].(map[string]interface{}); ok && wm != nil {
+				if norm := campaignspec.NormalizeWorldMap(wm); norm != nil {
+					set["campaignSpec.worldMap"] = norm
+				}
+			}
+		}
+	}
+	_, err = d.Coll.UpdateOne(ctx, bson.M{"gameId": gameID}, bson.M{"$set": set}, options.Update().SetUpsert(true))
 	if err != nil {
 		return false
 	}
@@ -324,6 +338,11 @@ func generateCampaignOpeningFrameStage(ctx context.Context, d *Deps, gameID, lan
 		"factions":        sliceFirst(llm.CoerceCampaignStageToArray("factions", spec["factions"]), 5),
 		"majorNPCs":       sliceFirst(llm.CoerceCampaignStageToArray("majorNPCs", spec["majorNPCs"]), 5),
 		"keyLocations":    sliceFirst(locs, 8),
+	}
+	if wm, ok := spec["worldMap"].(map[string]interface{}); ok && wm != nil {
+		if norm := campaignspec.NormalizeWorldMap(wm); norm != nil {
+			compact["worldMap"] = norm
+		}
 	}
 	campaignContextJSON := "{}"
 	if b, err := json.Marshal(compact); err == nil {

@@ -102,12 +102,17 @@ func toString(v interface{}) string {
 	return ""
 }
 
-// MergeCampaignSpecPreservingDmSecrets merges incoming with existing DM-only preservation.
+// MergeCampaignSpecPreservingDmSecrets merges incoming over existing (shallow per key), then preserves DM-only fields when the incoming patch omits or weakens them.
 func MergeCampaignSpecPreservingDmSecrets(existing, incoming map[string]interface{}) map[string]interface{} {
 	if incoming == nil {
 		return incoming
 	}
 	next := map[string]interface{}{}
+	if existing != nil {
+		for k, v := range existing {
+			next[k] = v
+		}
+	}
 	for k, v := range incoming {
 		next[k] = v
 	}

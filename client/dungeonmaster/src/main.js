@@ -294,6 +294,14 @@ const translations = {
     party_character_pending: 'No character yet',
     party_sync_tip:
         'Multiplayer: live updates over SSE when possible; we also reload when you return to this tab. Refresh the page if something looks out of date.',
+    world_map_panel_title: 'Region map (for the AI)',
+    world_map_panel_hint:
+        'Structured regions and borders the DM model uses for travel and “what is nearby.” It is not a battle map.',
+    world_map_regenerate: 'Generate layout',
+    world_map_save_busy: 'Saving…',
+    world_map_external_tool: 'Fantasy Map Generator (web, inspiration)',
+    world_map_regions_heading: 'Regions and neighbors',
+    world_map_none: 'No region graph on this campaign yet.',
     lobby_title: 'Party lobby',
     lobby_eyebrow: 'Before the tale begins',
     lobby_roster_heading: 'Who is at the table',
@@ -536,6 +544,14 @@ const translations = {
     party_character_pending: 'Sin personaje aún',
     party_sync_tip:
       'Multijugador: actualizaciones en vivo (SSE) cuando hay varios jugadores; también al volver a la pestaña. Recarga la página si ves algo desactualizado.',
+    world_map_panel_title: 'Mapa de regiones (para la IA)',
+    world_map_panel_hint:
+        'Regiones y fronteras en forma de grafo que el modelo del DM usa para viajes y qué hay cerca. No es un mapa de combate.',
+    world_map_regenerate: 'Generar disposición',
+    world_map_save_busy: 'Guardando…',
+    world_map_external_tool: 'Generador de mapas (web, inspiración)',
+    world_map_regions_heading: 'Regiones y vecinos',
+    world_map_none: 'Aún no hay grafo de regiones en esta campaña.',
     lobby_title: 'Sala del grupo',
     lobby_eyebrow: 'Antes de empezar la historia',
     lobby_roster_heading: 'Quién está en la mesa',

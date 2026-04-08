@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/deckofdmthings/gmai/internal/campaignspec"
 	"github.com/deckofdmthings/gmai/internal/config"
 	"github.com/deckofdmthings/gmai/internal/draftparty"
 	"github.com/deckofdmthings/gmai/internal/gameaccess"
@@ -92,11 +93,19 @@ func HandleGenerateCharacter(ctx context.Context, d *Deps, cfg *config.Config, h
 		campaignSpec, _ = gameRow["campaignSpec"].(map[string]interface{})
 		encounterState, _ = gameRow["encounterState"].(map[string]interface{})
 		if cs, ok := gameRow["campaignSpec"].(map[string]interface{}); ok && cs != nil {
-			setupForPrompt["existingCampaignWorld"] = map[string]interface{}{
+			wm := map[string]interface{}(nil)
+			if raw, ok := cs["worldMap"].(map[string]interface{}); ok && raw != nil {
+				wm = campaignspec.NormalizeWorldMap(raw)
+			}
+			ecw := map[string]interface{}{
 				"title": cs["title"], "campaignConcept": cs["campaignConcept"],
 				"majorConflicts": cs["majorConflicts"], "toneAndStyle": cs["toneAndStyle"],
 				"factions": cs["factions"], "majorNPCs": cs["majorNPCs"], "keyLocations": cs["keyLocations"],
 			}
+			if wm != nil {
+				ecw["worldMap"] = wm
+			}
+			setupForPrompt["existingCampaignWorld"] = ecw
 		}
 	}
 	preassignedPcName := ""

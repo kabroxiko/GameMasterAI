@@ -147,14 +147,16 @@ func PersistGameStateFromBody(ctx context.Context, coll *mongo.Collection, hub *
 	}
 
 	var nextCampaign map[string]interface{}
-	if _, ok := body["campaignSpec"]; ok {
-		var existingSpec map[string]interface{}
-		if existing != nil {
-			existingSpec, _ = existing["campaignSpec"].(map[string]interface{})
+	if inc, ok := body["campaignSpec"].(map[string]interface{}); ok && inc != nil {
+		allowCampaignPatch := existing == nil || ownerEff == "" || userID == ownerEff
+		if allowCampaignPatch {
+			var existingSpec map[string]interface{}
+			if existing != nil {
+				existingSpec, _ = existing["campaignSpec"].(map[string]interface{})
+			}
+			nextCampaign = campaignspec.MergeCampaignSpecPreservingDmSecrets(existingSpec, inc)
+			update["campaignSpec"] = nextCampaign
 		}
-		inc, _ := body["campaignSpec"].(map[string]interface{})
-		nextCampaign = campaignspec.MergeCampaignSpecPreservingDmSecrets(existingSpec, inc)
-		update["campaignSpec"] = nextCampaign
 	}
 
 	nextSpec := nextCampaign
@@ -184,8 +186,8 @@ func PersistGameStateFromBody(ctx context.Context, coll *mongo.Collection, hub *
 	if len(setOnInsert) > 0 {
 		mongoUpdate["$setOnInsert"] = setOnInsert
 	}
-	if _, ok := body["campaignSpec"]; ok {
-		if cs, _ := update["campaignSpec"].(map[string]interface{}); campaignspec.HasSubstantiveCampaignSpec(cs) {
+	if nextCampaign != nil {
+		if campaignspec.HasSubstantiveCampaignSpec(nextCampaign) {
 			mongoUpdate["$unset"] = bson.M{"draftPartyExpiresAt": ""}
 		}
 	}
